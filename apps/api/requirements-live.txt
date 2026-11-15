@@ -1,0 +1,4 @@
+-r requirements.txt
+# Optional local Live speech-to-text runtime. Model files are not pip-installed
+# and are never downloaded automatically by the app.
+vosk==0.3.45
