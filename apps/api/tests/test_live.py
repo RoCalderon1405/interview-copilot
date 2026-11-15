@@ -914,3 +914,41 @@ def test_real_vosk_pipeline_partial_final_source_and_no_audio_persistence(
     with closing(sqlite3.connect(tmp_path / "copilot.sqlite3")) as database:
         session_columns = {row[1] for row in database.execute("PRAGMA table_info(sessions)")}
         assert not {"audio", "transcript", "pcm"} & session_columns
+
+
+def test_ws_final_returns_labeled_semantic_candidate_only_after_index(tmp_path):
+    """Full WebSocket routing uses semantic search on finals, with attribution."""
+    from app.semantic import SemanticIndex
+
+    class Embedding:
+        def embed(self, texts):
+            for text in texts:
+                if 'authentication' in text.lower():
+                    yield [1.0, 0.0]
+                else:
+                    yield [0.0, 1.0]
+
+    app, _ = fake_client(
+        tmp_path,
+        feed_results=[FeedResult(final='Could you explain authentication?')],
+    )
+    add_qa(app.state.store, 'auth.md', 'What is authentication?', 'Verifies identity.')
+    app.state.semantic = SemanticIndex(app.state.store, embedder=Embedding())
+    app.state.semantic.index()
+    with TestClient(app) as client:
+        _, token = create_live(client)
+        with client.websocket_connect('/live/transcribe', headers=ALLOWED_HEADERS) as ws:
+            assert start(ws, token)['type'] == 'ready'
+            ws.send_bytes(pcm_frame())
+            assert ws.receive_json()['type'] == 'final'
+            candidate = ws.receive_json()
+            assert candidate['type'] == 'suggestion'
+            assert candidate['status'] == 'found'
+            assert candidate['match_type'] == 'semantic_qa'
+            assert candidate['question'] == 'Could you explain authentication'
+            assert candidate['matched_question'] == 'What is authentication?'
+            assert candidate['answer'] == 'Verifies identity.'
+            assert candidate['source']['document_name'] == 'auth.md'
+            ws.send_text('stop')
+            with pytest.raises(WebSocketDisconnect):
+                ws.receive_json()

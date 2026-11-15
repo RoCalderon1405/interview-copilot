@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from .live import LiveRuntime, router as live_router
 from .parsers import SUPPORTED_EXTENSIONS, parse_file
 from .retrieval import assess_answer, suggest, build_session_report
+from .semantic import SemanticIndex, SemanticUnavailable
 from .store import DuplicateDocumentError, KnowledgeStore
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
@@ -21,6 +22,11 @@ MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=3, max_length=3000)
+
+
+class SemanticIndexRequest(BaseModel):
+    # Only a direct request may authorize downloading an embedding model.
+    allow_download: bool = False
 
 
 class SessionRequest(BaseModel):
@@ -60,6 +66,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
 
     store = KnowledgeStore(data_dir or default_data_dir())
     application.state.store = store
+    application.state.semantic = SemanticIndex(store)
     application.state.live = LiveRuntime()
     application.include_router(live_router)
 
@@ -96,6 +103,17 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     @application.post("/answers")
     def get_answer(request: AskRequest):
         return suggest(store, request.question)
+
+    @application.get("/semantic/status")
+    def semantic_status():
+        return application.state.semantic.status()
+
+    @application.post("/semantic/index")
+    def semantic_index(request: SemanticIndexRequest):
+        try:
+            return application.state.semantic.index(allow_download=request.allow_download)
+        except SemanticUnavailable as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @application.post("/sessions", status_code=201)
     def create_session(request: SessionRequest):

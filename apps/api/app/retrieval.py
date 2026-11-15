@@ -67,15 +67,20 @@ def suggest(store: KnowledgeStore, question: str) -> dict:
     }
 
 
-def suggest_live(store: KnowledgeStore, question: str) -> dict:
-    """Automatic Live policy: literal exact Q&A only, otherwise abstain honestly.
+def suggest_live(store: KnowledgeStore, question: str, semantic=None) -> dict:
+    """Live: exact answer first, then an explicitly labeled semantic candidate.
 
-    An automatically transcribed question has no human review, so a merely
-    similar stored answer or a document excerpt could put an off-target answer
-    on screen. Manual ``suggest()`` keeps its broader lexical fallback for
-    user-typed questions; only exact normalized matches are returned here.
+    A semantic match is never presented as verified Q&A. With no local model or
+    indexed vectors, the previous exact-only behavior remains unchanged.
     """
-    return _exact_qa(store, question) or {"status": "no_evidence", "answer": None, "source": None, "match_type": None}
+    exact = _exact_qa(store, question)
+    if exact:
+        return exact
+    if semantic is not None:
+        candidate = semantic.candidate(question)
+        if candidate is not None:
+            return candidate
+    return {"status": "no_evidence", "answer": None, "source": None, "match_type": None}
 
 
 def build_assessment() -> dict:

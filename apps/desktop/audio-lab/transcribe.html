@@ -19,7 +19,8 @@
     <p id="status" role="status">Esperando consentimiento.</p>
     <div class="meter"><div id="level"></div></div>
     <p id="info">Pista: ninguna · PCM enviado: 0 tramas</p>
-    <section aria-label="Preguntas detectadas"><h2>Preguntas y respuestas documentadas</h2><p id="question-hint" class="muted">Esperando una pregunta completa…</p><ul id="questions" aria-live="polite"></ul><p class="muted">Detección heurística: algunas preguntas podrían no reconocerse. Solo se muestran respuestas originales de Q&A con coincidencia exacta; las demás preguntas se marcan sin respuesta. No se usa LLM.</p></section>
+    <p id="semantic-status" class="muted">Búsqueda semántica: consultando índice local…</p>
+    <section aria-label="Preguntas detectadas"><h2>Preguntas y respuestas documentadas</h2><p id="question-hint" class="muted">Esperando una pregunta completa…</p><ul id="questions" aria-live="polite"></ul><p class="muted">Detección heurística: algunas preguntas podrían no reconocerse. Las respuestas exactas se muestran como verificadas. Las coincidencias semánticas se señalan como posibles respuestas por revisar. No se usa LLM.</p></section>
     <section aria-label="Transcripción"><h2>Transcripción</h2><p id="partial" class="muted">Escuchando…</p><div id="finals" aria-live="polite"></div></section>
     <p class="muted">Si falla, copia solo el mensaje de estado. No compartas conversaciones privadas.</p>
   </main>

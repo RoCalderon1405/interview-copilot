@@ -13,11 +13,25 @@ const partial = document.getElementById('partial');
 const finals = document.getElementById('finals');
 const questions = document.getElementById('questions');
 const questionHint = document.getElementById('question-hint');
+const semanticStatus = document.getElementById('semantic-status');
 let stream = null, context = null, source = null, analyser = null;
 let silentOutput = null, worklet = null, socket = null, frame = null;
 let busy = false, stopping = false, pcmFrames = 0, stopTimeout = null;
 
 consent.addEventListener('change', () => { start.disabled = busy || !consent.checked; });
+
+async function updateSemanticStatus() {
+  try {
+    const response = await fetch(`${API}/semantic/status`, { cache: 'no-store' });
+    if (!response.ok) throw new Error('unavailable');
+    const data = await response.json();
+    semanticStatus.textContent = `Índice semántico local: ${data.indexed}/${data.questions} preguntas vectorizadas. ` +
+      (data.pending ? 'Las preguntas sin indexar solo admiten coincidencia exacta.' : 'Índice actualizado.');
+  } catch {
+    semanticStatus.textContent = 'Índice semántico no disponible; continúan las coincidencias exactas.';
+  }
+}
+void updateSemanticStatus();
 
 async function postJson(path, body) {
   const response = await fetch(`${API}${path}`, {
@@ -99,6 +113,7 @@ start.addEventListener('click', async () => {
   questions.replaceChildren();
   questionHint.textContent = 'Esperando una pregunta completa…';
   pcmFrames = 0;
+  void updateSemanticStatus();
   status.textContent = 'Solicitando audio del sistema…';
   try {
     // Critical: the validated capture call stays directly inside a real user click.
@@ -159,13 +174,23 @@ start.addEventListener('click', async () => {
           label.textContent = question;
           item.appendChild(label);
 
-          const exact = packet.status === 'found' && packet.match_type === 'exact_qa' &&
+          const hasAnswer = packet.status === 'found' &&
             typeof packet.answer === 'string' && Boolean(packet.answer.trim());
+          const exact = hasAnswer && packet.match_type === 'exact_qa';
+          const semantic = hasAnswer && packet.match_type === 'semantic_qa';
           const detail = document.createElement('p');
-          detail.className = exact ? 'answer-status found' : 'answer-status';
-          detail.textContent = exact ? 'Respuesta exacta del documento' : 'Sin coincidencia exacta en tus documentos';
+          detail.className = (exact || semantic) ? 'answer-status found' : 'answer-status';
+          detail.textContent = exact ? 'Respuesta exacta del documento'
+            : semantic ? 'Posible respuesta semántica (revisar antes de usar)'
+            : 'Sin respuesta suficientemente relacionada en tus documentos';
           item.appendChild(detail);
-          if (exact) {
+          if (semantic && typeof packet.matched_question === 'string') {
+            const original = document.createElement('p');
+            original.className = 'source-note';
+            original.textContent = `Pregunta del documento: ${packet.matched_question}`;
+            item.appendChild(original);
+          }
+          if (exact || semantic) {
             const answer = document.createElement('p');
             answer.className = 'document-answer';
             answer.textContent = packet.answer;

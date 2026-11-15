@@ -59,6 +59,14 @@ class KnowledgeStore:
                 CREATE VIRTUAL TABLE IF NOT EXISTS entry_fts USING fts5(
                     question, answer, body, tokenize = 'unicode61 remove_diacritics 2'
                 );
+                -- Optional local embedding index, deleted with its document entries.
+                CREATE TABLE IF NOT EXISTS qa_vectors (
+                    entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+                    model TEXT NOT NULL,
+                    dimensions INTEGER NOT NULL,
+                    embedding BLOB NOT NULL,
+                    PRIMARY KEY(entry_id,model)
+                );
                 CREATE TABLE IF NOT EXISTS sessions (
                     id TEXT PRIMARY KEY, mode TEXT NOT NULL, current_entry_id INTEGER,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -156,6 +164,41 @@ class KnowledgeStore:
                 WHERE entry_fts MATCH ? ORDER BY rank LIMIT ?
                 """, (expression, limit)).fetchall()
             return [dict(row) for row in rows]
+
+    def semantic_status(self, model: str) -> dict:
+        """Only Q&A questions are indexed; document excerpts remain out of scope."""
+        with self.connection() as db:
+            total = db.execute("SELECT COUNT(*) FROM entries WHERE kind='qa'").fetchone()[0]
+            indexed = db.execute("""SELECT COUNT(*) FROM qa_vectors v
+                JOIN entries e ON e.id=v.entry_id WHERE e.kind='qa' AND v.model=?""", (model,)).fetchone()[0]
+        return {"questions": total, "indexed": indexed, "pending": total - indexed}
+
+    def unindexed_qa(self, model: str) -> list[dict]:
+        """Only query text leaves SQLite for the local embedding model."""
+        with self.connection() as db:
+            rows = db.execute("""SELECT e.id,e.question FROM entries e
+                LEFT JOIN qa_vectors v ON v.entry_id=e.id AND v.model=?
+                WHERE e.kind='qa' AND v.entry_id IS NULL ORDER BY e.id""", (model,)).fetchall()
+        return [dict(row) for row in rows]
+
+    def save_qa_vectors(self, model: str, batch: list[tuple[int,int,bytes]]) -> None:
+        if not batch:
+            return
+        with self.connection() as db:
+            db.executemany("""INSERT INTO qa_vectors(entry_id,model,dimensions,embedding)
+                VALUES (?,?,?,?) ON CONFLICT(entry_id,model) DO UPDATE SET
+                dimensions=excluded.dimensions,embedding=excluded.embedding""",
+                [(entry_id, model, dimensions, vector) for entry_id, dimensions, vector in batch])
+
+    def semantic_candidates(self, model: str) -> list[dict]:
+        """Brute-force over a small local Q&A collection; no vector-server dependency."""
+        with self.connection() as db:
+            rows = db.execute("""SELECT e.question,e.answer,e.document_id,e.location,
+                d.name AS document_name,v.dimensions,v.embedding FROM qa_vectors v
+                JOIN entries e ON e.id=v.entry_id AND e.kind='qa'
+                JOIN documents d ON d.id=e.document_id
+                WHERE v.model=? ORDER BY e.id""", (model,)).fetchall()
+        return [dict(row) for row in rows]
 
     def create_session(self, mode: str) -> dict:
         session_id = uuid.uuid4().hex

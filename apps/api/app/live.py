@@ -9,8 +9,8 @@ Privacy and lifecycle boundaries for this slice:
   directory (or an explicitly trusted ``COPILOT_MODELS_DIR`` root). No request
   input can select a path and Vosk never downloads a model automatically.
 * Tokens are ephemeral, memory-only, single-use and bound to one Live session.
-* Automatic suggestions reuse the exact-only ``suggest_live`` policy; no LLM
-  or similarity fallback is involved.
+* Automatic suggestions preserve exact Q&A priority; an optional, local semantic
+  candidate is visibly labeled and never treated as a verified exact answer.
 """
 from __future__ import annotations
 
@@ -458,9 +458,9 @@ def _is_stop_control(text: str) -> bool:
     return isinstance(payload, dict) and payload.get("type") == "stop"
 
 
-def _retrieve_live(store: KnowledgeStore, question: str) -> tuple[dict, float]:
+def _retrieve_live(store: KnowledgeStore, question: str, semantic=None) -> tuple[dict, float]:
     started = time.perf_counter()
-    result = suggest_live(store, question)
+    result = suggest_live(store, question, semantic=semantic)
     return result, round((time.perf_counter() - started) * 1000, 2)
 
 
@@ -488,7 +488,9 @@ async def _emit_final(
     for question in detect_questions(text):
         if dedupe.seen(question):
             continue
-        suggestion, retrieval_ms = await asyncio.to_thread(_retrieve_live, store, question)
+        suggestion, retrieval_ms = await asyncio.to_thread(
+            _retrieve_live, store, question, getattr(websocket.app.state, "semantic", None)
+        )
         await websocket.send_json({
             "type": "suggestion",
             "question": question,
@@ -497,6 +499,8 @@ async def _emit_final(
             "answer": suggestion.get("answer"),
             "source": suggestion.get("source"),
             "match_type": suggestion.get("match_type"),
+            "matched_question": suggestion.get("matched_question"),
+            "similarity": suggestion.get("similarity"),
             "retrieval_ms": retrieval_ms,
             "last_word_end_seconds": result.last_word_end_seconds,
         })

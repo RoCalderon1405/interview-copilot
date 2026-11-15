@@ -80,3 +80,11 @@ Exact-match retrieval is intentionally strict. A transcription error or paraphra
 The Windows test showed that Vosk sometimes delays finalizing a question and the user had to repeat it. Without changing capture or Vosk, the backend now tries an **early exact-Q&A lookup** only after it sees the same complete question candidate in four consecutive Vosk partial updates. Early lookups cannot produce a `no_evidence` card, and finalized results remain the fallback. The same question is suppressed for 120 seconds after a successful early or final suggestion. This is a heuristic, not a guarantee: if Vosk consistently misrecognizes the words, this change cannot correct the recognizer.
 
 After installing this patch, restart FastAPI, then `npm run lab:transcribe` (the desktop code is unchanged). With the sample Q&A imported, play **one** spoken "What is authentication?" followed by silence. Verify whether one source-attributed answer appears without repeating. Also play an unrelated question and confirm it does not show an invented answer. **Real Windows validation: pending.**
+
+
+## Semantic Q&A lab (optional, not yet Windows validated)
+
+See `README.md` for the explicitly authorized model download and indexing steps.
+A `semantic_qa` message is displayed as **a possible answer requiring review**;
+`exact_qa` retains its verified label and priority. Unindexed or ambiguous questions
+continue to show no sufficient source answer. The audio pipeline is unchanged.
