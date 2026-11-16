@@ -1,5 +1,7 @@
 # Cleanup audit
 
+> Historical snapshot audit, not the current feature-status report. The retained notes below describe an earlier cleanup of supplied ZIPs. Subsequent owner validation established isolated Windows audio, PCM, Vosk English, question detection and exact/semantic retrieval. Main Live integration is implemented but complete Windows acceptance remains pending; see [current status](live-mode.md) and [architecture](architecture.md).
+
 Input: `desktop.zip`, `api.zip`, `interview-copilot(1).zip` (uploaded source snapshots). Originals were not modified.
 
 ## Kept
@@ -17,5 +19,5 @@ Input: `desktop.zip`, `api.zip`, `interview-copilot(1).zip` (uploaded source sna
 
 ## Caveats
 - No Git history was rewritten or destroyed. The supplied source ZIP did not contain `.git`; if a local Git repo exists, keep its backups and review a diff before replacing files.
-- Current automated test totals are **not comparable** to old 201-pass runs, because the nonworking capture branch and its tests were intentionally removed.
-- The independent lab is intentionally unvalidated against real Windows hardware; it can fail and must not be presented as a completed capture solution.
+- Automated test totals at the time of this cleanup were **not comparable** to old 201-pass runs, because the nonworking capture branch and its tests were intentionally removed. This note supplies no current test totals.
+- At the time of this audit, the independent lab had not yet been validated against real Windows hardware. That historical limitation was superseded by the owner's subsequent lab confirmations; it must not be read as the current lab status or as proof of integrated acceptance.

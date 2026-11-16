@@ -1,5 +1,7 @@
 # Windows audio lab — first real acceptance test
 
+**Current status:** The owner validated this isolated Windows system-audio test. PCM, Vosk English, question detection and exact/semantic retrieval were subsequently validated in the [transcription lab](transcription-lab.md). Complete [main Live acceptance](live-mode.md), integrated Spanish validation and conferencing exclusion remain pending. The procedure below is retained to isolate regressions, not as the current product milestone.
+
 ## Goal
 Prove actual audio capture before integrating FastAPI, STT or retrieval.
 
@@ -11,7 +13,7 @@ Prove actual audio capture before integrating FastAPI, STT or retrieval.
 
 ## Test on Windows (CMD)
 1. Confirm the main Interview Copilot app is closed; do not share private audio.
-2. `cd apps\desktop && npm install` (first run only).
+2. `cd apps\desktop`; if dependencies are missing, follow [README setup](../README.md#windows-setup-cmd) with approval first.
 3. `npm run lab:audio`.
 4. Check the consent checkbox and click **Iniciar prueba**.
 5. Play a nonsensitive sound in Windows using the speakers/headphones you normally use.
@@ -22,7 +24,7 @@ Prove actual audio capture before integrating FastAPI, STT or retrieval.
 
 ## If it fails
 - Do not add more mocks or permission brokers yet. Note Windows version, output device, Electron error name and whether a track was created.
-- Compare a working, license-compatible reference implementation only after this result; if Chromium loopback remains broken, isolate an alternative native WASAPI proof of concept.
+- If a regression is confirmed, discuss evidence and alternatives with the owner before replacing capture or starting a native WASAPI proof of concept.
 
-## Next slice after PASS
-The user confirmed the RMS capture test works on Windows. The **independent** audio-to-Vosk lab is now in `transcription-lab.md` and can be launched with `npm run lab:transcribe`. The original `npm run lab:audio` has not changed. Do not claim audio-to-text PASS until the real Windows test is witnessed.
+## Subsequent slices and current priority
+The independent audio-to-Vosk lab can be launched with `npm run lab:transcribe`; its English pipeline and retrieval are owner-validated. The product now reuses that path in the main Live interface, which requires its own Windows acceptance. Lab success does not prove integrated operation or screen-sharing exclusion. Do not rewrite the working audio path without concrete evidence and approval.
