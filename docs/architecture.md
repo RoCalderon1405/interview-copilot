@@ -32,6 +32,9 @@ FastAPI localhost:8765
 - `domain/knowledge.py`: framework-independent frozen `ParsedEntry` dataclass, shared by parsing and persistence (ARCH-003).
 - `domain/text.py`: the existing mutable `STOPWORDS` set, shared directly by persistence and retrieval (ARCH-004). Both legacy module imports reference this same object; its content is unchanged. `textnorm.py` remains unchanged and pure.
 - `application/ports.py`: `RetrievalReader`, a structural Protocol exposing only `find_exact_qa` and `find_matches` (ARCH-005). It preserves existing dictionary rows and requires no framework or concrete storage implementation.
+- `application/generation.py`: independent `GenerationService`, typed `GenerationProvider` port, fixed EN/ES instructions, bounded deadline/input/output and immutable AI-generated provenance with no documentary source (AI-001A). No HTTP/framework dependency or retrieval change.
+- `infrastructure/ollama.py`: local-only non-streaming chat HTTP adapter using runtime `httpx`; no proxies, redirects, retries, credentials, tools or model pulls. Validates bounded completed assistant output; provider payloads are not exposed as error messages.
+- `bootstrap.py`: explicit opt-in generation factory. It performs no network I/O and is deliberately **not called by `main.py` or Live**. Configuration and limits are documented in [README](../README.md#optional-local-generation-foundation-ai-001a).
 - `parsers.py`: format-specific extraction into Q&A or text fragments, with source locations and resource limits. Re-exports the same Domain `ParsedEntry` class for compatibility.
 - `store.py`: local document files, SQLite schema, entries, FTS5, vectors and Live/Practice session persistence. Imports `ParsedEntry` directly from Domain, not from the document parsers.
 - `retrieval.py`: exact and manual lexical retrieval, Live retrieval policy, plus existing lexical Practice assessment/reporting. Storage type dependencies use `RetrievalReader`; this module no longer imports `KnowledgeStore`.
@@ -49,7 +52,7 @@ ARCH-004 moved stopwords out of persistence without changing filtering behavior.
 See [README document limitations](../README.md#documents-and-retrieval) for extraction by format. A supported import is not a promise of Q&A extraction: PDF fragments, for example, are not Live answer candidates.
 
 - Manual `POST /answers`: normalized exact Q&A first, then FTS5 candidates with lexical scoring for similar Q&A/excerpts. The manual Live text box uses this same endpoint, not semantic Live retrieval.
-- Automatic Live: normalized exact Q&A first, then optional semantic Q&A; otherwise `no_evidence`. Semantic is a possible stored answer to review, not verified truth. No LLM generates answers.
+- Automatic Live: normalized exact Q&A first, then optional semantic Q&A; otherwise `no_evidence`. Semantic is a possible stored answer to review, not verified truth. No LLM generates Live answers; AI-001A's independent service is not wired into this flow.
 - Import stores original files, extracted entries and FTS rows. Extraction normalizes whitespace and limits field length; main-window IPC additionally limits answer length. Do not promise byte-for-byte original formatting or unlimited answers.
 - Embeddings cover Q&A questions only. Indexing is explicit; new imports remain pending until indexed. Model download requires `allow_download: true`; Live never downloads or indexes automatically.
 - Deletion removes entries/FTS/vectors and linked Practice answers. No in-place document update API exists. Filesystem and SQLite changes are not one atomic transaction; concurrent deletion/indexing guarantees need further tests before claiming them.
@@ -86,6 +89,6 @@ Dependencies point inward: domain imports no frameworks/adapters; application de
 
 For desktop, progressively separate `src/app`, `src/features/{live,knowledge,practice,settings}` and genuinely shared HTTP/bridge/UI modules. Electron should separate window lifecycle, permission/protection policies, IPC validation/handlers and preloads. Business coordination should not be embedded in JSX or platform handlers. Do not mechanically reproduce backend layers in React.
 
-Exact filenames and extraction order still need task-level approval. Prefer a few cohesive modules, hooks/reducers and concrete required ports over generic repositories, a DI framework, global state dependency or an interface for every class. Preserve the lab and existing Practice behavior; LLM providers and expanded Practice are future work, not current adapters.
+Exact filenames and extraction order still need task-level approval. Prefer a few cohesive modules, hooks/reducers and concrete required ports over generic repositories, a DI framework, global state dependency or an interface for every class. Preserve the lab and existing Practice behavior; Live LLM integration and expanded Practice remain future work. The only current generation adapter is the independent local Ollama foundation.
 
 Validate main Live first, then extract one responsibility per task with contract/regression tests and Windows acceptance where audio, IPC, lifecycle or protection is affected. Separate behavior fixes from moves. See [roadmap](roadmap.md) and [engineering rules](../AGENTS.md).

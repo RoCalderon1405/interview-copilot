@@ -2,11 +2,11 @@
 
 Interview Copilot is a local Windows desktop application for AI-assisted technical interviews. **Live Mode is the primary product:** explicitly authorized system audio → English/Spanish Vosk transcription → conversational question detection → document-backed answers with sources. Screen-sharing exclusion while remaining visible locally is a core requirement, not a guaranteed capability.
 
-Expanded Practice Mode is a future enhancement. The existing basic Practice page provides document questions, lexical keyword feedback and session reports; it is not an AI interview evaluator. LLM fallback is planned, **not implemented**.
+Expanded Practice Mode is a future enhancement. The existing basic Practice page provides document questions, lexical keyword feedback and session reports; it is not an AI interview evaluator. Live LLM fallback is planned, **not integrated**; AI-001A adds an independently callable local generation foundation only.
 
 ## Current status and stack
 
-Electron 39, React/TypeScript, Python/FastAPI, Vosk EN/ES, SQLite/FTS5 and optional local multilingual FastEmbed. No LLM provider or vector DB service is implemented.
+Electron 39, React/TypeScript, Python/FastAPI, Vosk EN/ES, SQLite/FTS5 and optional local multilingual FastEmbed. An opt-in Ollama HTTP adapter exists separately from Live; no vector DB service is implemented.
 
 - **VALIDATED by the owner in the isolated Windows lab:** system audio, PCM streaming, Vosk English transcription, conversational question detection, source-backed exact Q&A and local semantic retrieval with 204 indexed questions. This is validation history, not a benchmark or a bundled database.
 - **IMPLEMENTED / PENDING VALIDATION:** main React Live integration using an isolated capture-controls window. Complete Windows acceptance is still pending.
@@ -92,6 +92,20 @@ curl.exe -X POST http://127.0.0.1:8765/semantic/index -H "Content-Type: applicat
 ```
 
 The configured model is `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`. Only extracted Q&A questions receive embeddings; vectors stay in SQLite. Indexing is incremental and separate from capture. Live never downloads models or indexes automatically.
+
+## Optional local generation foundation (AI-001A)
+
+**IMPLEMENTED, not integrated into Live, Practice or any public endpoint.** `app.bootstrap.create_generation_service()` explicitly composes an independent async service; `await service.generate(question, language)` accepts only `en-US` or `es-MX`. Neither application startup nor setting environment variables invokes it automatically. The backend does not auto-load `.env`.
+
+- `COPILOT_LLM_ENABLED`: defaults to `false`; only `true`/`1` enables the factory (`false`/`0` disables it).
+- `COPILOT_OLLAMA_MODEL`: required explicit identifier of an approved, already installed **local** model; no default, installation, model pull or cloud fallback.
+- `COPILOT_LLM_TIMEOUT_SECONDS`: total service deadline, default **8 seconds**, configurable above 0 and at most 60; no retries. Cold model loading can exceed this deadline.
+- Fixed `http://127.0.0.1:11434/api/chat`, without environment proxies, credentials, redirects, tools or remote URL configuration. Ollama must be operated locally; configure its server with `OLLAMA_NO_CLOUD=1` to disable cloud features. Known cloud model suffixes are rejected, but the application cannot certify what a separately configured Ollama server or custom alias does.
+- Only the current question (3–3000 characters), language-specific fixed instructions and generation settings leave the service. No history, documents, transcripts, audio or credentials are supplied. The application does not persist or log prompts/answers; separately operated Ollama/server logging is outside this guarantee.
+- Non-streaming output: 256-token budget, at most 2000 answer characters and 64 KiB HTTP response. Empty, malformed, oversized, tool-call or token-truncated responses fail closed. `GenerationError.code` identifies disabled/configuration/input/provider/timeout/response failures; no fabricated answer replaces errors, and caller cancellation propagates.
+- Results carry `kind="ai_generated"`, configured provider/model and `source=None`: an **unverified suggestion**, never documentary evidence. Fixed instructions prefer 3–5 natural, professional sentences in B2 English or natural Spanish, practical examples, uncertainty and no invented personal experience. User text stays in a separate user message. Instructions are defense-in-depth, not a guarantee of model compliance; no execution capabilities are provided.
+
+Mocked tests validate contracts, not real model quality, latency or Windows operation. No Ollama installation/model download was performed for this task. AI-001B still needs automatic fallback policy, asynchronous Live coordination/cancellation, bounded concurrency, distinct WS/IPC/UI provenance and real Windows acceptance. Do not change an existing database or reindex to validate this foundation.
 
 ## Screen-sharing and privacy
 
