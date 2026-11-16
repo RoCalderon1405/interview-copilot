@@ -68,6 +68,28 @@ Automated results on 2026-11-16 using synthetic fixtures and the existing local 
 
 These tests do not replace real Windows capture, complete Spanish integration or stop/restart acceptance. DET-001 and screen-sharing exclusion are not fully validated by this result.
 
+## STT-001A — runtime compatibility gate (blocked)
+
+Read-only checks on 2026-11-16 established:
+
+- **VALIDATED:** existing `.venv` is CPython 3.14.7 AMD64 on Windows 11 build 26100; Vosk 0.3.45 is installed. Faster-Whisper, CTranslate2 and PyAV are not installed. No packages or models were downloaded/installed and no environment settings were changed.
+- **VALIDATED:** NVIDIA reports an RTX 4050 Laptop GPU with 6141 MiB VRAM and driver 610.88, advertising CUDA driver capability 13.3. CPU is an AMD Ryzen 7 7445HS (6 cores / 12 logical processors). Driver capability is not evidence of installed CUDA runtime libraries or successful inference.
+- **VALIDATED (published metadata only):** [CTranslate2](https://pypi.org/pypi/ctranslate2/json) 4.9.0 publishes `cp314-cp314-win_amd64`; [PyAV](https://pypi.org/pypi/av/json) 19.0.2 publishes `cp312-abi3-win_amd64`, compatible by tag with standard CPython 3.14. [Faster-Whisper](https://pypi.org/pypi/faster-whisper/json) 1.2.1 declares Python >=3.9 and CTranslate2 >=4,<5. This is not an installed dependency-resolution/import/inference test; no versions are selected or pinned yet.
+- **BLOCKER:** `cublas64_12.dll`, `cublasLt64_12.dll` and `cudnn64_9.dll` were not found on PATH; CUDA_PATH is unset, `nvcc` is not discoverable, and the standard NVIDIA CUDA Toolkit/cuDNN directories are absent. Libraries elsewhere are **UNKNOWN**. [Faster-Whisper's GPU guidance](https://github.com/SYSTRAN/faster-whisper#gpu) requires CUDA 12 cuBLAS and cuDNN 9. CTranslate2's installation page contains differing cuDNN guidance; verify the chosen release's actual binary requirements before any approved installation. GPU execution is not validated.
+
+**IMPLEMENTED:** nothing for STT-001A. Inspection confirms the existing capture click → AudioWorklet → 100 ms PCM16 mono 16 kHz frames → single-use session/language token → WebSocket → Vosk → question detection → exact/optional semantic retrieval → opt-in Ollama on final no-evidence flow. Vosk inference runs in a thread, but the connection loop awaits it before receiving the next frame; Faster-Whisper needs bounded reception/inference separation rather than simply replacing that call. Tokens currently bind language, not a selectable provider. Existing behavior is unchanged.
+
+**Resumption requires owner approval:** either make an approved CUDA 12/cuDNN 9 runtime available, or explicitly choose CPU-only development/validation (latency remains unproven). Separately approve installation of a verified dependency set and a local multilingual model, or identify existing model files. Do not downgrade Python, force native builds, download models, or change the working environment as a workaround without approval.
+
+### Required validation after the gate is resolved and implementation exists
+
+1. Verify the approved runtime imports on Windows/Python 3.14, actual CTranslate2 CPU/CUDA compute types and local-only multilingual model loading; record versions and timing, not private content. No automatic downloads.
+2. Run the complete backend suite and desktop Electron/audio tests, Electron lint and frontend build, including new mocked provider authorization, EN/ES segmentation, silence, bounded buffering and cancellation cases. These were **not run** for this documentation-only blocked task.
+3. In the capture window, choose each provider and EN/ES before the real consent/Start click; verify Vosk remains default, unavailable selections fail clearly, and provider/language cannot be switched within the authenticated session.
+4. With synthetic Windows output, measure cold/warm first-final latency, silence behavior and forced segment limits. During slow inference verify PCM continues with bounded buffering and explicit overload handling; stop, disconnect and restart without stale results or continuing capture.
+5. Repeat existing exact/source-backed, semantic-review, no-evidence and configured Ollama acceptance cases for both languages/providers. Preserve Vosk partial/final contracts; do not fabricate Whisper partials or trigger generation on stop-flushed finals. Check no audio persistence or transcript logging.
+6. Retain the separate conferencing-exclusion acceptance below; this task establishes no screen-sharing guarantee. Record PASS/FAIL and failing stage/message only. Deepgram remains outside STT-001A.
+
 ## Screen-sharing exclusion — manual acceptance pending
 
 Exclusion while remaining visible locally is a core Live requirement. The main window enables Electron `setContentProtection` by default on Windows; Settings permits toggling it and always-on-top. There is no separate compact overlay today. The capture-controls window is not content-protected.
