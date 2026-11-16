@@ -33,7 +33,9 @@ Vosk model files are separate from pip installation and are never downloaded by 
 
 The Windows database and imported documents default to `%LOCALAPPDATA%\InterviewCopilot`; the FastEmbed cache is its `embedding-models` subfolder. `COPILOT_DATA_DIR` overrides the data root. Preserve an existing override to keep using the same database. The API reads environment variables; it does **not** automatically load `.env`.
 
-Start the backend in a CMD terminal **from the project root**:
+Start the backend by double-clicking [`dev-api.bat`](dev-api.bat) in the repository root, or run its quoted full path from any CMD working directory. It uses the existing `.venv`, installs nothing and preserves backend console output. Stop with Ctrl+C. On a missing venv or backend failure, the script displays an error and waits for a key before returning a nonzero exit code (the backend's code when available).
+
+The equivalent manual command, **from the project root**, remains:
 
 ```bat
 .venv\Scripts\python.exe -m uvicorn app.main:app --app-dir apps\api --host 127.0.0.1 --port 8765
