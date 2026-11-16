@@ -6,16 +6,16 @@ Live Mode is the primary product. This order reflects the owner's priorities, no
 
 This file is the single lightweight task board; [Live Mode](live-mode.md) holds validation evidence and known limitations, not a second task list.
 
-**Current task: DOC-002**, completed by this documentation update. **Active implementation task: DET-001**, still in progress pending acceptance despite its implementation commit.
+**Current task: TEST-001**, completed in this update: Vosk integration tests now reflect the partial/final timestamp contract; the full backend suite passes without skips. **DET-001** remains implemented but not fully accepted; this task does not expand its scope.
 
 | ID | Description | Status | Commit reference |
 | --- | --- | --- | --- |
 | DOC-001 | Synchronize product, setup and engineering documentation | Completed | `5fa3ce8` |
-| DOC-002 | Establish task tracking and reconcile Live limitations | Completed (this update) | — |
+| DOC-002 | Establish task tracking and reconcile Live limitations | Completed | `ec65a11` |
 | ARCH-001 | Architecture assessment; analysis only, no refactor | Completed | — |
 | RESEARCH-001 | Research real-time question detection; research only | Completed | — |
 | DET-001 | Conservative conversational question segmentation | In progress; implemented, not fully accepted | `3bc2f05` |
-| TEST-001 | Investigate the existing Vosk timestamp test failures | Pending | — |
+| TEST-001 | Align Vosk integration tests with the partial/final timestamp contract | Completed; test-only correction, production unchanged | — |
 | DEV-001 | Simple Windows script to start the local backend | Pending | — |
 | LIVE-001 | Complete integrated Live Windows acceptance | Partially validated | `540c27d` (integration, not acceptance) |
 | ARCH-002 | Architecture follow-up; scope requires owner definition/approval | Pending | — |

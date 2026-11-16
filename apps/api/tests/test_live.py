@@ -35,6 +35,7 @@ from app.live import (
 )
 from app.main import create_app
 from app.parsers import ParsedEntry
+from app.textnorm import normalize
 
 ALLOWED_HEADERS = {"origin": "http://localhost:5173"}
 WAV_DIR = Path(__file__).resolve().parent / "fixtures" / "live_audio"
@@ -688,7 +689,7 @@ def test_ws_stable_partial_exact_answer_before_final_and_no_duplicate(tmp_path):
     app, _fake = fake_client(
         tmp_path,
         [FeedResult(partial=question) for _ in range(PARTIAL_STABILITY_FRAMES)]
-        + [FeedResult(final=question)],
+        + [FeedResult(final=question, last_word_end_seconds=2.09)],
     )
     add_qa(app.state.store, "sample.md", "What is authentication?", "Authentication verifies identity.")
     with TestClient(app) as client:
@@ -701,10 +702,13 @@ def test_ws_stable_partial_exact_answer_before_final_and_no_duplicate(tmp_path):
             early = websocket.receive_json()
             assert early["type"] == "suggestion"
             assert early["from_partial"] is True
+            assert early["last_word_end_seconds"] is None
             assert early["answer"] == "Authentication verifies identity."
             assert early["source"]["document_name"] == "sample.md"
             websocket.send_bytes(pcm_frame())
-            assert websocket.receive_json()["type"] == "final"
+            final = websocket.receive_json()
+            assert final["type"] == "final"
+            assert final["last_word_end_seconds"] == 2.09
             websocket.send_text("stop")
             with pytest.raises(WebSocketDisconnect):
                 websocket.receive_json()  # Final must not repeat the early answer.
@@ -782,6 +786,8 @@ def test_final_question_returns_exact_source(tmp_path):
             assert suggestion["source"]["document_name"] == "live-en.md"
             assert suggestion["source"]["location"] == "Línea 1"
             assert isinstance(suggestion["retrieval_ms"], float)
+            assert suggestion.get("from_partial", False) is False
+            assert suggestion["last_word_end_seconds"] == final["last_word_end_seconds"]
             websocket.send_text("stop")
             with pytest.raises(WebSocketDisconnect):
                 websocket.receive_json()
@@ -1050,18 +1056,45 @@ def test_real_vosk_pipeline_partial_final_source_and_no_audio_persistence(
                 pass
 
     partials = [event["text"] for event in events if event["type"] == "partial"]
-    finals = [event["text"] for event in events if event["type"] == "final"]
+    finals = [event for event in events if event["type"] == "final"]
     suggestions = [event for event in events if event["type"] == "suggestion"]
     assert partials and any(text.strip() for text in partials), events
-    assert finals and any(text.strip() for text in finals), events
-    assert suggestions, events
+    assert finals and all(event["text"].strip() for event in finals), events
+    assert not [event for event in events if event["type"] == "error"], events
+    assert all(event["language"] == language for event in finals)
+    # Word timing belongs to finalized speech, including when an early exact
+    # suggestion already consumed the dedupe slot and no final suggestion follows.
+    for final in finals:
+        assert final["last_word_end_seconds"] is not None
+        assert 0 < final["last_word_end_seconds"] <= len(pcm) / 32000 + 1
+    matching_finals = [
+        (index, event) for index, event in enumerate(events)
+        if event["type"] == "final" and normalize(event["text"]) == normalize(question)
+    ]
+    assert matching_finals, events
+    assert len(suggestions) == 1, events
     assert suggestions[-1]["status"] == "found", suggestions
     assert suggestions[-1]["answer"] == answer
     assert suggestions[-1]["source"]["document_name"] == document
     assert suggestions[-1]["match_type"] == "exact_qa"
     assert suggestions[-1]["retrieval_ms"] >= 0
-    assert suggestions[-1]["last_word_end_seconds"] is not None
-    assert suggestions[-1]["last_word_end_seconds"] > 0
+    suggestion = suggestions[0]
+    assert suggestion["language"] == language
+    assert normalize(suggestion["question"]) == normalize(question)
+    suggestion_index = events.index(suggestion)
+    if suggestion.get("from_partial", False):
+        assert suggestion["from_partial"] is True
+        assert suggestion["last_word_end_seconds"] is None
+        assert suggestion_index < matching_finals[0][0]
+        assert sum(event["type"] == "partial" for event in events[:suggestion_index]) >= PARTIAL_STABILITY_FRAMES
+    else:
+        assert suggestion["last_word_end_seconds"] is not None
+        assert suggestion["last_word_end_seconds"] > 0
+        assert any(
+            index < suggestion_index
+            and final["last_word_end_seconds"] == suggestion["last_word_end_seconds"]
+            for index, final in matching_finals
+        )
 
     # No raw audio or transcript files were written next to the SQLite store.
     audio_suffixes = {".wav", ".pcm", ".raw", ".webm", ".ogg"}

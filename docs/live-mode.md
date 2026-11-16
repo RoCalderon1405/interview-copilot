@@ -42,16 +42,18 @@ If text appears in the second window but not the main Live page, investigate the
 - Vosk errors such as `two` becoming `to` can hide an enumeration. No unrestricted word correction is implemented. Relevant context must not be removed merely to force an exact match.
 - Detection remains heuristic: conversational statements, reported/quoted speech and subordinate interrogatives can cause false positives or omissions. Existing guards reduce risk, not eliminate it. Partial detection is unchanged by DET-001: stable repeated candidates can trigger exact-only early answers; semantic lookup waits for finals.
 
-### Previously observed backend test failures
+### Backend event-contract validation (TEST-001)
 
-The latest recorded DET-001 validation (not rerun for this documentation change) reported:
+The two previously observed EN/ES Vosk failures were incorrect test expectations, not production timestamp defects. Early exact suggestions explicitly carry `from_partial: true` and `last_word_end_seconds: None`. The `final` transcript still carries Vosk word timing even when deduplication suppresses an identical final suggestion. A suggestion originating from a final carries that final's timestamp. No production behavior or timestamps were changed.
 
-- `tests/test_live.py`: **115 passed, 2 failed, 0 skipped**.
-- Full backend suite: **156 passed, 2 failed, 0 skipped**. These totals overlap; do not add them.
-- Both failures are EN/ES variants of `test_real_vosk_pipeline_partial_final_source_and_no_audio_persistence`, at the assertion requiring `suggestions[-1]["last_word_end_seconds"]` to be non-null. Exact answers and sources were returned before this assertion failed.
-- Early partial suggestions deliberately carry `last_word_end_seconds: None`; deduplication can suppress a later final suggestion for the same question. Both failures also reproduced with the pre-DET-001 detector loaded in memory, so they were observed as pre-existing test/contract mismatches, not new segmentation regressions. Their resolution remains pending under TEST-001.
+TEST-001 reproduced both failures, then aligned `test_real_vosk_pipeline_partial_final_source_and_no_audio_persistence` with this contract. The test requires a correctly recognized final with positive, audio-duration-bounded timing, one source-backed exact suggestion, correct partial/final event ordering and the existing non-persistence checks. Deterministic transport tests also verify null early timing, final timing preservation and propagation to final-origin suggestions.
 
-These tests use synthetic WAV files and local Vosk; they do not replace real capture, full Spanish integration or lifecycle acceptance. No tests were changed or skipped to obtain these results, and DET-001 is not fully validated.
+Automated results on 2026-11-16 using synthetic fixtures and the existing local Vosk models:
+- `tests/test_live.py`: **117 passed, 0 failed, 0 skipped** (previously 115 passed, 2 failed).
+- Full backend suite: **158 passed, 0 failed, 0 skipped** (previously 156 passed, 2 failed). Totals overlap; do not add them.
+- One existing Starlette/httpx deprecation warning remains; no dependency changes were made.
+
+These tests do not replace real Windows capture, complete Spanish integration or stop/restart acceptance. DET-001 and screen-sharing exclusion are not fully validated by this result.
 
 ## Screen-sharing exclusion — manual acceptance pending
 
