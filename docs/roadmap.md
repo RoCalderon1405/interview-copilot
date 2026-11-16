@@ -2,10 +2,36 @@
 
 Live Mode is the primary product. This order reflects the owner's priorities, not authorization to implement every item.
 
+## Official task board
+
+This file is the single lightweight task board; [Live Mode](live-mode.md) holds validation evidence and known limitations, not a second task list.
+
+**Current task: DOC-002**, completed by this documentation update. **Active implementation task: DET-001**, still in progress pending acceptance despite its implementation commit.
+
+| ID | Description | Status | Commit reference |
+| --- | --- | --- | --- |
+| DOC-001 | Synchronize product, setup and engineering documentation | Completed | `5fa3ce8` |
+| DOC-002 | Establish task tracking and reconcile Live limitations | Completed (this update) | — |
+| ARCH-001 | Architecture assessment; analysis only, no refactor | Completed | — |
+| RESEARCH-001 | Research real-time question detection; research only | Completed | — |
+| DET-001 | Conservative conversational question segmentation | In progress; implemented, not fully accepted | `3bc2f05` |
+| TEST-001 | Investigate the existing Vosk timestamp test failures | Pending | — |
+| DEV-001 | Simple Windows script to start the local backend | Pending | — |
+| LIVE-001 | Complete integrated Live Windows acceptance | Partially validated | `540c27d` (integration, not acceptance) |
+| ARCH-002 | Architecture follow-up; scope requires owner definition/approval | Pending | — |
+| ARCH-003 | Architecture follow-up; scope requires owner definition/approval | Pending | — |
+| ARCH-004 | Architecture follow-up; scope requires owner definition/approval | Pending | — |
+| AI-001 | Decide and implement an approved LLM fallback | Pending; not implemented | — |
+| DET-002 | Further contextual detection beyond DET-001; scope requires approval | Deferred | — |
+
+**Status meaning:** Completed applies to the stated deliverable (analysis/research is not implementation); implemented means code exists, not that Windows acceptance passed. Partially validated records only confirmed cases. Pending work is not started/accepted; deferred work is not current scope. A commit alone does not close a task. `—` means no dedicated reference recorded; this update's commit is available in Git history.
+
+**Maintenance:** each approved task must update its row when completed, including available commit references and validation limits. Record partial progress without upgrading it to full validation; keep the current-task indicator accurate. Do not create another board or copy conversation history into documentation.
+
 ## Established baseline
 
 - Owner-validated isolated Windows lab: system audio, PCM, Vosk English, conversational question detection, exact Q&A with sources and local FastEmbed retrieval with 204 indexed questions.
-- Implemented: main Live integration, Spanish support, document management, manual search and native protection controls. Implementation does not establish complete Windows or conferencing acceptance; see [current validation](live-mode.md).
+- Implemented: main Live integration, Spanish support, document management, manual search and native protection controls. The owner confirmed integrated Windows audio, English transcription, Electron-to-React events, conversational detection in tested cases and exact retrieval with sources. Complete acceptance and conferencing checks remain pending; see [current validation](live-mode.md).
 - Existing basic Practice sessions/lexical feedback remain available; expanded Practice is future work.
 
 ## Ordered priorities
