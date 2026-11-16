@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import {
   AudioLines, BookOpen, Check, ChevronRight, CircleHelp, File, FileSpreadsheet, FileText,
   GraduationCap, Headphones, LayoutDashboard, LockKeyhole, Plus, Search,
-  Send, Settings, Shield, Sparkles, Trash2, UploadCloud,
+  Send, Settings, Shield, Sparkles, Trash2, UploadCloud, WifiOff, X,
 } from 'lucide-react';
 import { api } from './api';
-import type { AnswerResponse, DocumentRecord, Feedback, PracticeQuestion, Session, SessionReport } from './types';
+import type { AnswerResponse, DocumentRecord, Feedback, LiveEvent, PracticeQuestion, Session, SessionReport } from './types';
 
 type Page = 'overview' | 'knowledge' | 'practice' | 'live' | 'settings';
 const NAV: { id: Page; label: string; icon: typeof BookOpen }[] = [
@@ -65,11 +65,11 @@ function Overview({docs,navigate}: {docs: DocumentRecord[]; navigate: (p:Page)=>
     <div className="eyebrow"><span className="eyebrow-dot"/> YOUR PERSONAL AI ASSISTANT</div>
     <h1>Get ready for your <em>next big opportunity.</em></h1>
     <p className="page-description">Your knowledge, your answers, your interview preparation. Everything in one workspace.</p>
-    <div className="stats"><div className="stat"><div>Knowledge documents</div><strong>{docs.length.toString().padStart(2,'0')}</strong><span>Local library</span></div><div className="stat"><div>Indexed knowledge entries</div><strong>{docs.reduce((acc,d)=>acc+d.entry_count,0)}</strong><span>Ready for retrieval</span></div><div className="stat"><div>Available interview modes</div><strong>02</strong><span>Practice + Live manual</span></div></div>
+    <div className="stats"><div className="stat"><div>Knowledge documents</div><strong>{docs.length.toString().padStart(2,'0')}</strong><span>Local library</span></div><div className="stat"><div>Indexed knowledge entries</div><strong>{docs.reduce((acc,d)=>acc+d.entry_count,0)}</strong><span>Ready for retrieval</span></div><div className="stat"><div>Available interview modes</div><strong>02</strong><span>Practice + Live audio</span></div></div>
     <h2 className="section-heading">Your workspace <span>Choose where to start</span></h2>
     <div className="feature-grid">
       <button className="feature-card" onClick={()=>navigate('practice')}><span className="feature-icon violet"><GraduationCap size={24}/></span><span className="feature-kicker">LEARN & IMPROVE</span><strong>Practice Interview</strong><span>Practice questions from your own files and compare your answers with trusted references.</span><span className="feature-cta">Start practicing <ChevronRight size={17}/></span></button>
-      <button className="feature-card" onClick={()=>navigate('live')}><span className="feature-icon cyan"><Headphones size={24}/></span><span className="feature-kicker">ON-DEMAND ASSISTANCE</span><strong>Live Interview</strong><span>Ask questions manually during a session. Automatic audio capture is the next milestone.</span><span className="feature-cta">Open live mode <ChevronRight size={17}/></span></button>
+      <button className="feature-card" onClick={()=>navigate('live')}><span className="feature-icon cyan"><Headphones size={24}/></span><span className="feature-kicker">ON-DEMAND ASSISTANCE</span><strong>Live Interview</strong><span>Capture Windows system audio with consent, transcribe questions and retrieve documented answers.</span><span className="feature-cta">Open live mode <ChevronRight size={17}/></span></button>
     </div>
     <div className="onboarding"><div className="onboarding-icon"><UploadCloud size={23}/></div><div><strong>Build your personal knowledge base</strong><p>Upload XLSX, DOCX, PDF, TXT or Markdown to retrieve source-backed answers.</p></div><button className="btn secondary" onClick={()=>navigate('knowledge')}>Add documents <Plus size={16}/></button></div>
   </>;
@@ -176,11 +176,54 @@ function Practice({showError}: {showError:(e:unknown)=>void}) {
     </div>}
   </>;
 }
-/** The Live page is intentionally manual until Windows audio is demonstrated in the isolated lab. */
+/** Live Mode receives read-only transcription and retrieval events from the isolated capture window. */
 function Live({showError}: {showError:(e:unknown)=>void}) {
   const [question,setQuestion] = useState('');
   const [answer,setAnswer] = useState<AnswerResponse|null>(null);
   const [busy,setBusy] = useState(false);
+  const [captureOpen,setCaptureOpen] = useState(false);
+  const [events,setEvents] = useState<LiveEvent[]>([]);
+  const [partial,setPartial] = useState('');
+  const [frames,setFrames] = useState(0);
+  const [captureBusy,setCaptureBusy] = useState(false);
+
+  useEffect(() => {
+    const bridge = window.copilotDesktop;
+    if (!bridge) return;
+    let mounted = true;
+    const receive = (packet: LiveEvent) => {
+      if (!mounted) return;
+      if (packet.type === 'partial') {setPartial(packet.text); return;}
+      if (packet.type === 'metrics') {setFrames(packet.frames); return;}
+      if (packet.type === 'final') setPartial('');
+      if (packet.type === 'status' && packet.text === 'Captura detenida.') setCaptureOpen(false);
+      setEvents(prev => [...prev,packet].slice(-80));
+    };
+    const unsubscribe = bridge.onLiveEvent(receive);
+    void bridge.getLiveState().then(state => {
+      if (!mounted) return;
+      setCaptureOpen(state.open);
+      setEvents(state.events);
+    }).catch(showError);
+    return () => {mounted = false;unsubscribe();};
+  }, []);
+
+  const openCapture = async () => {
+    const bridge = window.copilotDesktop;
+    if (!bridge) return;
+    setCaptureBusy(true);
+    try {
+      const opened = await bridge.openLiveCapture();
+      if (!opened) throw new Error('La captura Live requiere ejecutar la aplicación con npm run dev.');
+      setCaptureOpen(true);
+    } catch(error) {showError(error);} finally {setCaptureBusy(false);}
+  };
+  const closeCapture = async () => {
+    const bridge = window.copilotDesktop;
+    if (!bridge) return;
+    setCaptureBusy(true);
+    try {await bridge.closeLiveCapture();setCaptureOpen(false);} catch(error) {showError(error);} finally {setCaptureBusy(false);}
+  };
   const search = async () => {
     if (question.trim().length < 3) return;
     setBusy(true);
@@ -188,16 +231,46 @@ function Live({showError}: {showError:(e:unknown)=>void}) {
     catch (error) {showError(error);}
     finally {setBusy(false);}
   };
+  const suggestions = events.filter((event): event is Extract<LiveEvent,{type:'suggestion'}> => event.type === 'suggestion').slice(-20).reverse();
+  const transcript = events.filter((event): event is Extract<LiveEvent,{type:'final'}> => event.type === 'final').slice(-20).reverse();
+  const mostRecentStatus = [...events].reverse().find(event => event.type === 'status' || event.type === 'error');
   return <>
-    <div className="page-header"><div><div className="eyebrow">LIVE INTERVIEW · DEVELOPMENT</div><h1>Live Interview</h1>
-      <p className="page-description">Consulta tu base de conocimientos. La captura de audio de Windows está temporalmente fuera de la aplicación hasta superar una prueba real.</p>
+    <div className="page-header"><div><div className="eyebrow">LIVE INTERVIEW · LOCAL</div><h1>Live Interview</h1>
+      <p className="page-description">Captura audio de Windows con consentimiento, detecta preguntas y muestra respuestas de documentos locales.</p>
     </div><span className="page-icon"><Headphones size={22}/></span></div>
-    <div className="callout"><Shield size={21}/><div><strong>Captura de audio aún no validada</strong>
-      <span>Para evaluar la captura del sistema usa <code>npm run lab:audio</code> desde apps/desktop. No se graba ni se transmite audio en este laboratorio.</span></div></div>
-    <div className="panel query-panel"><div className="panel-title"><h2>Consulta por texto</h2><span className="hint">Respuestas de documentos</span></div>
+    <div className="panel live-control-panel">
+      <div className="panel-title"><h2>Audio del sistema</h2><span className="hint">Electron → Vosk → Q&A</span></div>
+      <p className="small-muted">La captura escucha toda la salida de audio de Windows. Se abrirá una ventana aislada para seleccionar idioma, autorizar e iniciar. Ninguna grabación se guarda.</p>
+      <div className="live-actions">
+        <button className="btn primary" disabled={captureBusy || !window.copilotDesktop} onClick={()=>void openCapture()}>
+          <Headphones size={17}/>{captureOpen ? 'Mostrar controles de audio' : 'Preparar captura Live'}
+        </button>
+        <button className="btn secondary" disabled={!captureOpen || captureBusy} onClick={()=>void closeCapture()}>Detener y cerrar captura</button>
+        <span className="live-frames">PCM: {frames} tramas</span>
+      </div>
+      <p className="small-muted" role="status">{mostRecentStatus?.type === 'status' || mostRecentStatus?.type === 'error' ? mostRecentStatus.text : 'La captura está detenida.'}</p>
+    </div>
+    <div className="live-results">
+      <section className="panel live-suggestions"><div className="panel-title"><h2>Preguntas y respuestas</h2><span className="hint">Exactas o posibles coincidencias semánticas</span></div>
+        {suggestions.length ? suggestions.map((item,index) => <div className="live-result" key={`${item.question}-${index}`}>
+          <strong>{item.question}</strong>
+          <span className={`live-result-label ${item.status === 'found' ? 'matched' : ''}`}>
+            {item.match_type === 'exact_qa' ? 'Respuesta exacta del documento' : item.match_type === 'semantic_qa' ? 'Posible respuesta semántica — revisar' : 'Sin respuesta suficientemente relacionada'}
+          </span>
+          {item.match_type === 'semantic_qa' && item.matched_question && <span className="small-muted">Pregunta guardada: {item.matched_question}</span>}
+          {item.answer && <p>{item.answer}</p>}
+          {item.source && <div className="small-muted">Fuente: {item.source.document_name} · {item.source.location}</div>}
+        </div>) : <p className="small-muted">Las preguntas detectadas aparecerán aquí cuando se reciba audio.</p>}
+      </section>
+      <section className="panel live-transcript"><div className="panel-title"><h2>Transcripción</h2><span className="hint">Vosk · tiempo real</span></div>
+        {partial && <p className="live-partial">{partial}</p>}
+        {transcript.length ? transcript.map((item,index) => <p className="live-transcript-line" key={index}>{item.text}</p>) : <p className="small-muted">Esperando voz…</p>}
+      </section>
+    </div>
+    <div className="panel query-panel"><div className="panel-title"><h2>Consulta por texto</h2><span className="hint">Alternativa manual</span></div>
       <label className="field-label" htmlFor="live-question">Pregunta</label>
-      <textarea id="live-question" rows={4} maxLength={3000} value={question}
-        onChange={event=>setQuestion(event.target.value)} placeholder="Escribe una pregunta de una entrevista de prueba..."/>
+      <textarea id="live-question" rows={3} maxLength={3000} value={question}
+        onChange={event=>setQuestion(event.target.value)} placeholder="Escribe una pregunta..."/>
       <div className="action-row"><button className="btn primary" disabled={busy||question.trim().length<3} onClick={()=>void search()}>
         {busy?'Consultando...':'Consultar'} <Search size={16}/></button></div>
       {answer && <AnswerCard answer={answer}/>}

@@ -5,4 +5,12 @@ contextBridge.exposeInMainWorld('copilotDesktop', {
   getWindowState: () => ipcRenderer.invoke('copilot:window-state'),
   setContentProtection: enabled => ipcRenderer.invoke('copilot:set-protection', enabled),
   setAlwaysOnTop: enabled => ipcRenderer.invoke('copilot:set-on-top', enabled),
+  openLiveCapture: () => ipcRenderer.invoke('copilot:live-open'),
+  closeLiveCapture: () => ipcRenderer.invoke('copilot:live-close'),
+  getLiveState: () => ipcRenderer.invoke('copilot:live-state'),
+  onLiveEvent: callback => {
+    const listener = (_event, packet) => callback(packet);
+    ipcRenderer.on('copilot:live-event', listener);
+    return () => ipcRenderer.removeListener('copilot:live-event', listener);
+  },
 });

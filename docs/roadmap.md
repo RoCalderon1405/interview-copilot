@@ -1,10 +1,9 @@
-# Roadmap — incrementos validados
+# Roadmap — Interview Copilot
 
-- ✅ Captura loopback real de Windows (laboratorio).
-- ✅ Vosk transcribe voz real en inglés (laboratorio).
-- ✅ Detección de preguntas técnicas conversacionales y respuestas Q&A exactas (laboratorio).
-- 🧪 **ACTIVO:** embeddings multilingües Q&A → índice SQLite local → sugerencia semántica con origen, verificación en Windows pendiente.
-- ⏭️ Integrar el laboratorio validado en Live principal, después de validar recuperación semántica.
-- ⏭️ Fallback de LLM solo tras acuerdo explícito y pruebas de límites.
+1. ✅ Windows loopback PCM → Vosk transcription in standalone lab (user verified).
+2. ✅ Conversational question detection, exact Q&A and semantic retrieval in lab (user verified; 204/204 index).
+3. 🧪 **CURRENT:** Integrate that flow into the main React Live Mode via separate consent-based Electron capture window (Windows acceptance pending).
+4. ⏭️ Improve UI and lifecycle after Windows integration is confirmed.
+5. ⏭️ LLM fallback for unanswered questions, only after defining provider, context boundaries, privacy and evaluation.
 
-No reconstruir captura ni introducir agentes múltiples.
+Do not rewrite the working audio pipeline or add new agents.

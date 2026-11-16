@@ -17,6 +17,15 @@ const semanticStatus = document.getElementById('semantic-status');
 let stream = null, context = null, source = null, analyser = null;
 let silentOutput = null, worklet = null, socket = null, frame = null;
 let busy = false, stopping = false, pcmFrames = 0, stopTimeout = null;
+let lastPublishedMetric = 0;
+function publish(packet) {
+  // No bridge in the standalone lab: the original validated path stays independent.
+  window.copilotCapture?.publish(packet);
+}
+function setStatus(text) {
+  status.textContent = text;
+  publish({type:'status',text});
+}
 
 consent.addEventListener('change', () => { start.disabled = busy || !consent.checked; });
 
@@ -51,6 +60,10 @@ function measure() {
   const rms = Math.sqrt(power / samples.length);
   level.style.width = `${Math.min(100, rms * 400)}%`;
   info.textContent = `Pista: ${stream?.getAudioTracks()[0]?.readyState ?? 'ninguna'} · RMS: ${rms.toFixed(5)} · PCM enviado: ${pcmFrames} tramas`;
+  if (window.copilotCapture && performance.now() - lastPublishedMetric > 1000) {
+    lastPublishedMetric = performance.now();
+    publish({type:'metrics',frames:pcmFrames});
+  }
   frame = requestAnimationFrame(measure);
 }
 
@@ -80,7 +93,8 @@ async function cleanup() {
 async function fail(error) {
   const message = error instanceof Error ? error.message : String(error);
   await cleanup();
-  status.textContent = `FALLO: ${message}`;
+  setStatus(`FALLO: ${message}`);
+  publish({type:'error',text:message});
 }
 
 async function beginPcm() {
@@ -99,7 +113,7 @@ async function beginPcm() {
   };
   source.connect(worklet);
   worklet.connect(silentOutput); // Gain 0: never play loopback again.
-  status.textContent = 'Vosk listo. Reproduce una frase en Windows.';
+  setStatus('Vosk listo. Reproduce una frase en Windows.');
 }
 
 start.addEventListener('click', async () => {
@@ -114,7 +128,7 @@ start.addEventListener('click', async () => {
   questionHint.textContent = 'Esperando una pregunta completa…';
   pcmFrames = 0;
   void updateSemanticStatus();
-  status.textContent = 'Solicitando audio del sistema…';
+  setStatus('Solicitando audio del sistema…');
   try {
     // Critical: the validated capture call stays directly inside a real user click.
     stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
@@ -131,7 +145,7 @@ start.addEventListener('click', async () => {
     await context.resume();
     measure();
 
-    status.textContent = 'Comprobando Vosk local…';
+    setStatus('Comprobando Vosk local…');
     const response = await fetch(`${API}/live/status`, { cache: 'no-store', mode: 'cors' });
     if (!response.ok) throw new Error(`Estado de Vosk: HTTP ${response.status}`);
     const availability = await response.json();
@@ -144,12 +158,13 @@ start.addEventListener('click', async () => {
       language: selectedLanguage, consent: true,
     });
     if (!busy || stopping) return;
-    status.textContent = 'Conectando con Vosk…';
+    setStatus('Conectando con Vosk…');
     socket = new WebSocket(SOCKET);
     socket.onopen = () => socket?.send(JSON.stringify({ type: 'start', token: grant.token }));
     socket.onmessage = event => {
       let packet;
       try { packet = JSON.parse(event.data); } catch { return; }
+      if (['partial','final','suggestion'].includes(packet.type)) publish(packet);
       if (packet.type === 'ready') {
         if (packet.sample_rate !== 16000 || packet.sample_format !== 'pcm_s16le' || packet.channels !== 1) {
           void fail(new Error('El formato requerido por el backend es diferente'));
@@ -212,7 +227,7 @@ start.addEventListener('click', async () => {
     };
     socket.onerror = () => { if (!stopping) void fail(new Error('Falló la conexión WebSocket con Vosk')); };
     socket.onclose = event => {
-      if (stopping) { void cleanup().then(() => { status.textContent = 'Captura y Vosk detenidos.'; }); }
+      if (stopping) { void cleanup().then(() => { setStatus('Captura y Vosk detenidos.'); }); }
       else if (busy) void fail(new Error(`WebSocket cerrado: ${event.code}`));
     };
   } catch (error) { await fail(error); }
@@ -221,14 +236,14 @@ start.addEventListener('click', async () => {
 stop.addEventListener('click', () => {
   if (!busy || stopping) return;
   stopping = true;
-  status.textContent = 'Deteniendo; esperando último resultado de Vosk…';
+  setStatus('Deteniendo; esperando último resultado de Vosk…');
   stream?.getTracks().forEach(track => track.stop());
   try { source?.disconnect(worklet); } catch { /* node not connected */ }
   if (socket?.readyState === WebSocket.OPEN) {
     socket.send('stop');
-    stopTimeout = setTimeout(() => { void cleanup().then(() => { status.textContent = 'Captura detenida.'; }); }, 3000);
+    stopTimeout = setTimeout(() => { void cleanup().then(() => { setStatus('Captura detenida.'); }); }, 3000);
   } else {
-    void cleanup().then(() => { status.textContent = 'Captura detenida.'; });
+    void cleanup().then(() => { setStatus('Captura detenida.'); });
   }
 });
 window.addEventListener('pagehide', () => { void cleanup(); });
