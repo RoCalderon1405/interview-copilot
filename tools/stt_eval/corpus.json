@@ -1,0 +1,14 @@
+[
+  {"id":"en-baseline","language":"en","text":"What is authentication?","fixture":"en.wav"},
+  {"id":"es-baseline","language":"es","text":"Cómo resuelves un conflicto en el equipo?","fixture":"es.wav"},
+  {"id":"en-api","language":"en","text":"How would you design a REST API with authentication and rate limiting?"},
+  {"id":"en-types","language":"en","text":"What is the difference between TypeScript interfaces and type aliases?"},
+  {"id":"en-database","language":"en","text":"How do database indexes affect query performance and write latency?"},
+  {"id":"en-concurrency","language":"en","text":"Could you explain a race condition and how a mutex prevents it?"},
+  {"id":"en-distributed","language":"en","text":"How would you implement retries with exponential backoff in a distributed system?"},
+  {"id":"es-api","language":"es","text":"Cómo diseñarías una API REST con autenticación y límites de solicitudes?"},
+  {"id":"es-types","language":"es","text":"Cuál es la diferencia entre interfaces y alias de tipos en TypeScript?"},
+  {"id":"es-database","language":"es","text":"Cómo afectan los índices de una base de datos al rendimiento y la latencia?"},
+  {"id":"es-concurrency","language":"es","text":"Puedes explicar una condición de carrera y cómo la evita un mutex?"},
+  {"id":"es-distributed","language":"es","text":"Cómo implementarías reintentos con espera exponencial en un sistema distribuido?"}
+]

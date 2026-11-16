@@ -6,7 +6,7 @@ Live Mode is the primary product. This order reflects the owner's priorities, no
 
 This file is the single lightweight task board; [Live Mode](live-mode.md) holds validation evidence and known limitations, not a second task list.
 
-**Current task: STT-001A**, blocked at the runtime compatibility gate; no implementation or environment changes. Windows/Python 3.14 wheels exist, but Faster-Whisper/CTranslate2/PyAV are absent and required CUDA 12 cuBLAS/cuDNN 9 DLLs are not discoverable. See [compatibility evidence and resumption checks](live-mode.md#stt-001a--runtime-compatibility-gate-blocked). Owner approval is required before installing dependencies/models or choosing CPU-only validation. AI-001B remains implemented, disabled by default, with real Ollama/Windows acceptance pending. **DET-001** remains implemented but not fully accepted. AI-001C has not started and still requires scope definition and approval.
+**Current task: STT-001A**, CPU-only evaluation complete; Live integration is **not implemented** and awaits owner decision. Isolated Whisper Small INT8 improved synthetic EN/ES accuracy but increased latency, CPU and RAM; recommendation is a conditional opt-in prototype, retaining Vosk as default. Eight evaluation tests plus all 303 backend, 9 Electron, 3 UI and 2 PCM tests passed; build/lint passed. The existing `.venv`, Live code and Vosk models remain unchanged. GPU and human-speech/low-end hardware acceptance remain unvalidated. See [evidence, results and recommendation](live-mode.md#stt-001a--runtime-compatibility-gate-and-cpu-only-evaluation). AI-001B remains implemented, disabled by default, with real Ollama/Windows acceptance pending. **DET-001** remains implemented but not fully accepted. AI-001C has not started and still requires scope definition and approval.
 
 | ID | Description | Status | Commit reference |
 | --- | --- | --- | --- |
@@ -25,7 +25,7 @@ This file is the single lightweight task board; [Live Mode](live-mode.md) holds 
 | AI-001A | Independent local Ollama generation foundation, disabled by default | Completed; 96 mocked contract/compatibility cases and all 284 backend tests passed; no real model acceptance | `87bd00f` |
 | AI-001B | Automatic Live fallback integration after suitable documentary retrieval fails | Completed implementation; 303 backend tests, 9 Electron, 3 UI and 2 PCM tests passed; real Ollama/Windows acceptance pending | — |
 | AI-001C | Follow-up generation work | Pending scope definition and owner approval; no implementation authorized | — |
-| STT-001A | Selectable local Vosk/Faster-Whisper Live STT, EN/ES | Blocked at compatibility gate; pipeline inspected, no implementation; runtime/model installation requires approval | — |
+| STT-001A | Selectable local Vosk/Faster-Whisper Live STT, EN/ES | CPU-only evaluation completed/validated on synthetic audio; conditional opt-in recommendation; integration awaits owner decision; GPU gate unvalidated | `febae20` (initial gate); evaluation commit in history |
 | STT-001B | Deepgram Nova-3 STT | Approved future task; not started, excluded from STT-001A | — |
 | DET-002 | Further contextual detection beyond DET-001; scope requires approval | Deferred | — |
 
@@ -41,7 +41,7 @@ This file is the single lightweight task board; [Live Mode](live-mode.md) holds 
 
 ## Ordered priorities
 
-1. **Current:** resolve STT-001A's runtime compatibility gate with owner approval before implementation. Preserve Vosk as default/fallback; no automatic cloud fallback or Deepgram implementation. Main Live Windows acceptance remains pending using the existing backend, database and cache: one spoken question, main-window transcript/source-backed result, abstention and stop/restart, with EN/ES tracked separately.
+1. **Current:** review STT-001A's completed CPU evaluation and decide whether to approve an opt-in Live integration experiment, with an explicit latency target and human EN/ES/CPU acceptance. No integration work is authorized by the evaluation. Preserve Vosk as default/fallback; no CUDA installation, automatic cloud fallback or Deepgram implementation. Main Live Windows acceptance remains pending using the existing backend, database and cache: one spoken question, main-window transcript/source-backed result, abstention and stop/restart, with EN/ES tracked separately.
 2. Review task-level architecture decisions within the approved pragmatic Clean Architecture direction; then refactor incrementally with clear React/Electron feature boundaries. Preserve APIs, retrieval policy, permissions and validated capture. The refactor is not completed.
 3. Windows backend startup is available through [`dev-api.bat`](../dev-api.bat) (DEV-001, verified in CMD); it uses the existing venv and does not install packages or create environments.
 4. AI-001A/B provide opt-in automatic local fallback only after final no-evidence, using question/language and fixed instructions without execution capabilities. Validate an approved existing local model on Windows for EN/ES quality, cold/warm latency, audio continuity, replacement and teardown before claiming real-provider acceptance. Documentary priority, default-disabled behavior and manual/Practice policies remain intact. AI-001C has no approved scope and is not started.
