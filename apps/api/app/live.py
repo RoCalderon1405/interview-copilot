@@ -109,6 +109,47 @@ _ES_CUES = re.compile(
     r"cuentame|hablame|describe|dime|explica)\b"
 )
 
+# Only marked conversational boundaries are searched inside finals. Requiring
+# an auxiliary (EN) or a small set of direct-question forms (ES) avoids splitting
+# subordinate clauses such as "explain how it works and why it matters".
+_DIRECT_QUESTION = re.compile(
+    r"^(?:(?:what|why|how|when|where|who|which)\s+"
+    r"(?:is|are|was|were|do|does|did|can|could|would|will|should|have|has)\b|"
+    r"why\s+(?:use|choose|prefer|avoid|test)\b|"
+    r"(?:can|could|would|will|do|did|are|have)\s+you\b|"
+    r"tell me\b|describe\b|walk me through\b|explain\b|"
+    r"(?:que|cual)\s+(?:es|son)\b|por que\b|"
+    r"como\s+(?:resuelves|manejas|manejarias|eliges|elegirias|implementas|"
+    r"implementarias|disenas|disenarias|pruebas|probarias|funciona)\b|"
+    r"puedes\b|podrias\b|me puedes\b|me podrias\b|"
+    r"cuentame\b|hablame\b|describe\b|dime\b|explica\b)"
+)
+_FINAL_BOUNDARY = re.compile(
+    r"\b(?:(?:and|so|y|entonces)\s+)?(?P<intro>"
+    r"here(?:'s|s| is) (?:the|my) question|(?:the|my) question is|"
+    r"next question|(?:la|mi) pregunta es|(?:la )?siguiente pregunta)\b[\s,:;-]*|"
+    r"\b(?:(?:and|y)\s+)?(?P<number>"
+    r"one|two|three|four|five|six|seven|eight|nine|ten|"
+    r"first|second|third|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|"
+    r"primero|segundo|tercero|[1-9]|10)\b[\s.):;-]+|"
+    r"\b(?P<transition>so|entonces|ahora|and|y)\b[\s,:;-]+",
+    re.IGNORECASE,
+)
+_QUOTED_TEXT = re.compile(r'"[^"\n]*"|“[^”\n]*”|«[^»\n]*»|(?<!\w)\'[^\'\n]*\'(?!\w)')
+_REPORTED_SPEECH = re.compile(
+    r"\b(?:i|we|they|he|she|you)\s+(?:(?:already|previously)\s+)?"
+    r"(?:discussed|answered|asked|quoted|said|wrote)\b|"
+    r"\b(?:document|example|article|transcript)\s+(?:says|contains|quotes|reads)\b|"
+    r"\b(?:discutimos|respondimos|preguntamos|dijeron|dijo|cito)\b|"
+    r"\b(?:documento|ejemplo|articulo)\s+(?:dice|contiene|cita)\b"
+)
+_SUBORDINATE_PROMPT = re.compile(
+    r"^(?:(?:can|could|would) you )?(?:explain|describe|tell me)\s+"
+    r"(?:how|why|what|which|when|where)\b|"
+    r"^(?:(?:puedes|podrias) )?(?:explica|explicar|describe|describir|dime)\s+"
+    r"(?:como|por que|que|cual|cuando|donde)\b"
+)
+
 
 class SpeechUnavailable(Exception):
     """Optional local speech runtime or model is not installed."""
@@ -147,8 +188,8 @@ def _vosk_installed() -> bool:
         return False
 
 
-def detect_questions(text: str, limit: int = MAX_QUESTION_CANDIDATES) -> list[str]:
-    """Return at most ``limit`` heuristic EN/ES question candidates.
+def _detect_partial_questions(text: str, limit: int = MAX_QUESTION_CANDIDATES) -> list[str]:
+    """Preserve the original prefix/explicit-introduction policy for partials.
 
     This is intentionally lexical: no punctuation is required ("what is
     authentication", "como resuelves..."), and leading fillers and explicit
@@ -189,6 +230,71 @@ def detect_questions(text: str, limit: int = MAX_QUESTION_CANDIDATES) -> list[st
     return candidates
 
 
+def detect_questions(text: str, limit: int = MAX_QUESTION_CANDIDATES) -> list[str]:
+    """Extract ordered EN/ES final candidates at conservative marked boundaries.
+
+    Explicit introductions, numbered questions and direct questions following
+    conversational transitions can delimit an unpunctuated turn. Unmarked
+    embedded interrogatives are deliberately not scanned. Quoted text cannot
+    create boundaries; reporting cues suppress embedded extraction. This is a
+    lexical heuristic, not a guarantee of sentence boundaries or intent.
+    """
+    candidates: list[str] = []
+    seen: set[str] = set()
+    # Mask only for boundary discovery, retaining offsets and original wording.
+    masked = _QUOTED_TEXT.sub(lambda match: " " * len(match.group()), text)
+    sentence_start = 0
+    sentence_ends = [match.span() for match in _SENTENCE_SPLIT.finditer(masked)]
+    for sentence_end, next_start in [*sentence_ends, (len(text), len(text))]:
+        raw = text[sentence_start:sentence_end]
+        scan = masked[sentence_start:sentence_end]
+        segment_start = 0
+        segments: list[str] = []
+        for boundary in _FINAL_BOUNDARY.finditer(scan):
+            suffix = scan[boundary.end():].lstrip(" ¿:,-;")
+            normalized = normalize(suffix)
+            if boundary.lastgroup in {"intro", "number"}:
+                is_question = bool(_EN_CUES.match(normalized) or _ES_CUES.match(normalized)
+                                   or _DIRECT_QUESTION.match(normalized))
+            else:
+                is_question = bool(_DIRECT_QUESTION.match(normalized))
+            if not is_question or _REPORTED_SPEECH.search(normalize(scan[:boundary.start()])):
+                continue
+            # A bare conjunction only separates questions, not arbitrary prose.
+            if boundary.group("transition") and boundary.group("transition").casefold() in {"and", "y"}:
+                preceding = scan[segment_start:boundary.start()]
+                preceding = normalize(_LEADING_FILLER.sub("", preceding.strip()))
+                if (not (_EN_CUES.match(preceding) or _ES_CUES.match(preceding)
+                         or _DIRECT_QUESTION.match(preceding))
+                        or _SUBORDINATE_PROMPT.match(preceding)):
+                    continue
+            segments.append(raw[segment_start:boundary.start()])
+            segment_start = boundary.end()
+        segments.append(raw[segment_start:])
+        for segment in segments:
+            # Do not let the legacy introduction fallback rediscover quoted or
+            # reported questions that boundary discovery intentionally rejected.
+            visible = _QUOTED_TEXT.sub(lambda match: " " * len(match.group()), segment)
+            prefix = _QUESTION_INTRO.sub("", _LEADING_FILLER.sub("", visible.strip()), count=1).strip()
+            normalized = normalize(prefix)
+            if not (_EN_CUES.match(normalized) or _ES_CUES.match(normalized)
+                    or _DIRECT_QUESTION.match(normalized)
+                    or visible.rstrip().endswith("?")):
+                continue
+            candidate = _QUESTION_INTRO.sub(
+                "", _LEADING_FILLER.sub("", segment.strip()), count=1
+            ).rstrip(" \t?!.;,").strip()
+            key = normalize(candidate)
+            if not key or key in seen:
+                continue
+            if len(candidates) >= limit:
+                return candidates
+            seen.add(key)
+            candidates.append(candidate)
+        sentence_start = next_start
+    return candidates
+
+
 class StablePartialQuestion:
     """Return only stable question-shaped Vosk partials, once per candidate.
 
@@ -204,7 +310,7 @@ class StablePartialQuestion:
         self._attempted: OrderedDict[str, None] = OrderedDict()
 
     def observe(self, partial: str) -> str | None:
-        questions = detect_questions(partial, limit=2)
+        questions = _detect_partial_questions(partial, limit=2)
         if len(questions) != 1:
             self.reset()
             return None

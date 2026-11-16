@@ -226,6 +226,124 @@ def test_detector_caps_candidates_per_final():
     assert candidates[-1] == f"What is question {MAX_QUESTION_CANDIDATES - 1}"
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("thanks for joining so how do you handle authentication", ["how do you handle authentication"]),
+        ("we build APIs next question what is authentication", ["what is authentication"]),
+        ("one what is authentication two why use dependency injection",
+         ["what is authentication", "why use dependency injection"]),
+        ("we have a few questions one what is authentication and two why would you use redis",
+         ["what is authentication", "why would you use redis"]),
+        ("first what is authentication second how do you test code",
+         ["what is authentication", "how do you test code"]),
+        ("1 what is authentication 2 why use redis",
+         ["what is authentication", "why use redis"]),
+        ("what is authentication and what is authorization",
+         ["what is authentication", "what is authorization"]),
+        ("thanks here is the question what is authentication and here is the question what is authorization",
+         ["what is authentication", "what is authorization"]),
+        ("what is authentication so how do you handle expired tokens",
+         ["what is authentication", "how do you handle expired tokens"]),
+        ("one when designing an API how do you choose between get and post two what is authorization",
+         ["when designing an API how do you choose between get and post", "what is authorization"]),
+        ("gracias por venir entonces cómo manejas los errores", ["cómo manejas los errores"]),
+        ("trabajamos con APIs ahora qué es la autenticación", ["qué es la autenticación"]),
+        ("uno qué es la autenticación dos por qué usar redis",
+         ["qué es la autenticación", "por qué usar redis"]),
+        ("primero qué es la autenticación segundo cómo eliges una base de datos",
+         ["qué es la autenticación", "cómo eliges una base de datos"]),
+        ("qué es la autenticación y cuál es la diferencia con autorización",
+         ["qué es la autenticación", "cuál es la diferencia con autorización"]),
+        ("por qué usar redis y cuál es la alternativa",
+         ["por qué usar redis", "cuál es la alternativa"]),
+        ("gracias la pregunta es qué es la autenticación y la siguiente pregunta cómo resuelves un conflicto",
+         ["qué es la autenticación", "cómo resuelves un conflicto"]),
+        ("la siguiente pregunta cuando diseñas una API cómo manejas los errores",
+         ["cuando diseñas una API cómo manejas los errores"]),
+        ("THANKS SO WHAT IS C++ AND WHAT IS C#", ["WHAT IS C++", "WHAT IS C#"]),
+        ("so how do you handle auth orization", ["how do you handle auth orization"]),
+    ],
+)
+def test_final_detects_marked_conversational_questions(text, expected):
+    """Synthetic finals exercise only explicit transitions and enumerations."""
+    assert detect_questions(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "thanks for joining today we build APIs how do you handle authentication",
+        "we discussed how do you handle authentication yesterday",
+        "we discussed so how do you handle authentication yesterday",
+        "I already answered one what is authentication two why use redis",
+        "the document contains the question what is authentication",
+        "the example says one what is authentication two why use redis",
+        'the interviewer wrote "so what is authentication and what is authorization"',
+        'the sample contains "one what is authentication? two why use redis?"',
+        "a sample 'here is the question what is authentication' is printed",
+        "el documento dice la pregunta es qué es la autenticación",
+        "discutimos entonces cómo manejas los errores",
+        "el ejemplo contiene «uno qué es la autenticación dos por qué usar redis»",
+        "gracias trabajamos con APIs como manejas los errores",
+        "we have one database and two replicas",
+        "we use tokens and what we store is encrypted",
+        "thanks so how we handle errors depends on the service",
+        "thanks so his authentication",
+    ],
+)
+def test_final_does_not_scan_arbitrary_or_reported_interrogatives(text):
+    assert detect_questions(text) == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "how do you determine which database fits and why it matters",
+        "explain how it works and why do we need a cache",
+        "can you explain what is authentication and what is authorization",
+        "explica cómo funciona y por qué necesitamos una caché",
+        "cómo eliges una base de datos y qué factores consideras",
+        'how do you parse "and what is authorization" safely',
+        "what is authentication we use tokens in our services",
+        "how do you apply what we discussed yesterday",
+    ],
+)
+def test_final_preserves_subordinates_quotes_and_unmarked_trailing_context(text):
+    assert detect_questions(text) == [text]
+
+
+def test_marked_final_order_deduplication_and_limits():
+    text = "one what is authentication two what is authentication three what is authorization"
+    assert detect_questions(text) == ["what is authentication", "what is authorization"]
+    assert detect_questions(text, limit=1) == ["what is authentication"]
+    assert detect_questions(text, limit=0) == []
+    many = " and ".join(f"what is concept {index}" for index in range(12))
+    assert detect_questions(many) == [f"what is concept {index}" for index in range(MAX_QUESTION_CANDIDATES)]
+
+
+@pytest.mark.parametrize(
+    "partial",
+    [
+        "thanks for joining so how do you handle authentication",
+        "one what is authentication two why use redis",
+        "gracias entonces cómo manejas los errores",
+    ],
+)
+def test_marked_final_segmentation_does_not_expand_partial_detection(partial):
+    tracker = StablePartialQuestion()
+    for _ in range(PARTIAL_STABILITY_FRAMES + 2):
+        assert tracker.observe(partial) is None
+
+
+def test_consecutive_questions_still_form_one_partial_candidate():
+    partial = "what is authentication and what is authorization"
+    tracker = StablePartialQuestion()
+    for _ in range(PARTIAL_STABILITY_FRAMES - 1):
+        assert tracker.observe(partial) is None
+    assert tracker.observe(partial) == partial
+
+
 def test_final_result_reads_vosk_word_end_timing():
     from app.live import _final_result
 
@@ -696,6 +814,43 @@ def test_ws_spoken_intro_finds_exact_answer_early_and_dedupes_repetition(tmp_pat
                 websocket.receive_json()  # No duplicate suggestion.
 
 
+@pytest.mark.parametrize(
+    ("language", "final", "questions"),
+    [
+        ("en-US", "thanks so what is authentication and what is authorization and what is terraform",
+         ["what is authentication", "what is authorization", "what is terraform"]),
+        ("es-MX", "gracias uno qué es la autenticación dos qué es la autorización tres qué es terraform",
+         ["qué es la autenticación", "qué es la autorización", "qué es terraform"]),
+    ],
+)
+def test_ws_marked_final_preserves_transcript_and_orders_source_backed_suggestions(tmp_path, language, final, questions):
+    app, _ = fake_client(tmp_path, [FeedResult(final=final)])
+    add_qa(app.state.store, "identity.md", questions[0], "Synthetic identity answer.")
+    add_qa(app.state.store, "permissions.md", questions[1], "Synthetic permissions answer.")
+    with TestClient(app) as client:
+        _, token = create_live(client, language)
+        with client.websocket_connect("/live/transcribe", headers=ALLOWED_HEADERS) as ws:
+            assert start(ws, token)["type"] == "ready"
+            ws.send_bytes(pcm_frame())
+            transcript = ws.receive_json()
+            assert transcript["type"] == "final"
+            assert transcript["text"] == final
+            assert transcript["language"] == language
+            suggestions = [ws.receive_json() for _ in questions]
+            assert [item["question"] for item in suggestions] == questions
+            assert all(item["type"] == "suggestion" for item in suggestions)
+            assert [item["match_type"] for item in suggestions] == ["exact_qa", "exact_qa", None]
+            assert [item["source"]["document_name"] for item in suggestions[:2]] == ["identity.md", "permissions.md"]
+            assert suggestions[0]["answer"] == "Synthetic identity answer."
+            assert suggestions[1]["answer"] == "Synthetic permissions answer."
+            assert suggestions[2]["status"] == "no_evidence"
+            assert suggestions[2]["answer"] is None
+            assert suggestions[2]["source"] is None
+            ws.send_text("stop")
+            with pytest.raises(WebSocketDisconnect):
+                ws.receive_json()
+
+
 def test_final_unknown_question_returns_no_evidence(tmp_path):
     app, _fake = fake_client(tmp_path, [FeedResult(final="What is Terraform?")])
     add_qa(app.state.store, "live-en.md", "What is authentication?", "Authentication verifies identity.")
@@ -916,7 +1071,15 @@ def test_real_vosk_pipeline_partial_final_source_and_no_audio_persistence(
         assert not {"audio", "transcript", "pcm"} & session_columns
 
 
-def test_ws_final_returns_labeled_semantic_candidate_only_after_index(tmp_path):
+@pytest.mark.parametrize(
+    "spoken_final",
+    [
+        "Could you explain authentication?",
+        "thanks so Could you explain authentication",
+        "thanks next question Could you explain authentication",
+    ],
+)
+def test_ws_final_returns_labeled_semantic_candidate_only_after_index(tmp_path, spoken_final):
     """Full WebSocket routing uses semantic search on finals, with attribution."""
     from app.semantic import SemanticIndex
 
@@ -930,7 +1093,7 @@ def test_ws_final_returns_labeled_semantic_candidate_only_after_index(tmp_path):
 
     app, _ = fake_client(
         tmp_path,
-        feed_results=[FeedResult(final='Could you explain authentication?')],
+        feed_results=[FeedResult(final=spoken_final)],
     )
     add_qa(app.state.store, 'auth.md', 'What is authentication?', 'Verifies identity.')
     app.state.semantic = SemanticIndex(app.state.store, embedder=Embedding())
