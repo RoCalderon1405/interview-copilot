@@ -29,15 +29,16 @@ FastAPI localhost:8765
 
 - `apps/api/app/main.py`: application composition, HTTP schemas/routes, upload handling and origin/host restrictions.
 - `live.py`: token lifecycle, single active transcription slot, Vosk cache, heuristic EN/ES detector, deduplication, WebSocket protocol and retrieval coordination. Stable repeated partials permit early exact lookup; finals permit exact/semantic lookup.
-- `parsers.py`: format-specific extraction into Q&A or text fragments, with source locations and resource limits.
-- `store.py`: local document files, SQLite schema, entries, FTS5, vectors and Live/Practice session persistence.
+- `domain/knowledge.py`: framework-independent frozen `ParsedEntry` dataclass, shared by parsing and persistence (ARCH-003).
+- `parsers.py`: format-specific extraction into Q&A or text fragments, with source locations and resource limits. Re-exports the same Domain `ParsedEntry` class for compatibility.
+- `store.py`: local document files, SQLite schema, entries, FTS5, vectors and Live/Practice session persistence. Imports `ParsedEntry` directly from Domain, not from the document parsers.
 - `retrieval.py`: exact and manual lexical retrieval, Live retrieval policy, plus existing lexical Practice assessment/reporting.
 - `semantic.py`: optional local FastEmbed model, explicit incremental indexing, similarity/margin abstention and stored-answer candidates.
 - `apps/desktop/src/App.tsx`: shell, pages, UI state and coordination; `api.ts`/`types.ts`: HTTP client and TypeScript contracts.
 - `electron/main.cjs`: windows, permissions, protection, sender validation, IPC sanitization and bounded event history. Preloads expose narrow bridges.
 - `audio-lab/transcribe.js` and `pcm-processor.js`: consent-driven capture, Web Audio lifecycle, PCM conversion, local HTTP/WS and lab display. The integration reuses these files rather than a rewritten capture engine.
 
-This is not yet a layered Clean Architecture backend or a fully feature-separated desktop.
+ARCH-003 extracts only the shared record, preserving its five fields, constructor, equality and immutability. Domain uses only the standard library; persistence no longer loads PDF/Office libraries through its entry type. Parsing algorithms, storage, retrieval and Live behavior are unchanged. This is the first small extraction, not a fully layered Clean Architecture backend or a feature-separated desktop.
 
 ### Documents, retrieval and consistency
 
@@ -65,7 +66,7 @@ The main window calls `setContentProtection(true)` on Windows and exposes a Sett
 
 Exclusion while remaining visible locally is a core Live requirement. Teams, Zoom and Google Meet compatibility remains pending real Windows sessions, separately by client/browser version and capture mode. It does not guarantee undetectability, hide the process or replace audio consent. See [manual validation](live-mode.md#screen-sharing-exclusion--manual-acceptance-pending).
 
-## Approved direction — not implemented refactoring
+## Approved direction — incremental refactoring
 
 Progressively separate backend responsibilities into:
 

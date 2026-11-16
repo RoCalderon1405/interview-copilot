@@ -5,12 +5,13 @@ import io
 import re
 import unicodedata
 import zipfile
-from dataclasses import dataclass
 from pathlib import Path
 
 from docx import Document
 from openpyxl import load_workbook
 from pypdf import PdfReader
+
+from .domain.knowledge import ParsedEntry as ParsedEntry  # Preserve the public parser import.
 
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".txt", ".md"}
 MAX_ARCHIVE_UNCOMPRESSED_BYTES = 80 * 1024 * 1024
@@ -38,15 +39,6 @@ def _header_role(value: str) -> str | None:
     if parts[0] in {"answer", "answers", "respuesta", "respuestas"}:
         return "answer"
     return None
-
-
-@dataclass(frozen=True)
-class ParsedEntry:
-    kind: str  # 'qa' or 'text'
-    question: str
-    answer: str
-    body: str
-    location: str
 
 
 def _clean(value: object) -> str:
