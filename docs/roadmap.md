@@ -6,7 +6,7 @@ Live Mode is the primary product. This order reflects the owner's priorities, no
 
 This file is the single lightweight task board; [Live Mode](live-mode.md) holds validation evidence and known limitations, not a second task list.
 
-**Current task: AI-001A**, completed: local Ollama generation foundation, independent of Live. All 284 backend tests passed, including 96 new generation/HTTP/compatibility cases, with no failures or skips and one existing Starlette/httpx deprecation warning. Real model quality/latency and Windows acceptance remain pending. **DET-001** remains implemented but not fully accepted. AI-001B has not started; AI-001C scope still requires definition and approval.
+**Current task: AI-001B**, completed implementation, disabled by default: 303 backend tests, 9 Electron, 3 UI rendering and 2 PCM tests passed, without failures or skips; TypeScript/Vite build, Electron syntax and diff checks passed. Existing Starlette/httpx deprecation and classic capture-script Vite bundling warnings remain. Real Ollama quality/latency and Windows acceptance remain pending. **DET-001** remains implemented but not fully accepted. AI-001C has not started and still requires scope definition and approval.
 
 | ID | Description | Status | Commit reference |
 | --- | --- | --- | --- |
@@ -22,8 +22,8 @@ This file is the single lightweight task board; [Live Mode](live-mode.md) holds 
 | ARCH-003 | Extract ParsedEntry into Domain with compatible public imports | Completed; contracts, backend suite and Windows startup verified | `6b8cc0b` |
 | ARCH-004 | Separate stopword policy from persistence with compatible public imports | Completed; identity, import independence and lexical regressions verified | `7464c11` |
 | ARCH-005 | Decouple retrieval from concrete storage through a minimal read port | Completed; in-memory behavior, import independence and existing store compatibility verified | `9df97a2` |
-| AI-001A | Independent local Ollama generation foundation, disabled by default | Completed; 96 mocked contract/compatibility cases and all 284 backend tests passed; no real model acceptance | — |
-| AI-001B | Automatic Live fallback integration after suitable documentary retrieval fails | Planned; not started; trigger details, concurrency and WS/IPC/UI provenance need task approval and Windows acceptance | — |
+| AI-001A | Independent local Ollama generation foundation, disabled by default | Completed; 96 mocked contract/compatibility cases and all 284 backend tests passed; no real model acceptance | `87bd00f` |
+| AI-001B | Automatic Live fallback integration after suitable documentary retrieval fails | Completed implementation; 303 backend tests, 9 Electron, 3 UI and 2 PCM tests passed; real Ollama/Windows acceptance pending | — |
 | AI-001C | Follow-up generation work | Pending scope definition and owner approval; no implementation authorized | — |
 | DET-002 | Further contextual detection beyond DET-001; scope requires approval | Deferred | — |
 
@@ -42,7 +42,7 @@ This file is the single lightweight task board; [Live Mode](live-mode.md) holds 
 1. **Current:** complete main Live Windows acceptance using the existing backend, database and cache. Test one spoken question, main-window transcript/source-backed result, abstention and stop/restart. Track EN and ES separately; do not infer Spanish validation from English.
 2. Review task-level architecture decisions within the approved pragmatic Clean Architecture direction; then refactor incrementally with clear React/Electron feature boundaries. Preserve APIs, retrieval policy, permissions and validated capture. The refactor is not completed.
 3. Windows backend startup is available through [`dev-api.bat`](../dev-api.bat) (DEV-001, verified in CMD); it uses the existing venv and does not install packages or create environments.
-4. AI-001A supplies an opt-in local Ollama foundation using only question/language, with fixed instructions and no execution capabilities. Automatic Live fallback remains unavailable: approve AI-001B integration details and evaluate a real local model before claiming quality/latency or Windows acceptance. AI-001C has no approved scope.
+4. AI-001A/B provide opt-in automatic local fallback only after final no-evidence, using question/language and fixed instructions without execution capabilities. Validate an approved existing local model on Windows for EN/ES quality, cold/warm latency, audio continuity, replacement and teardown before claiming real-provider acceptance. Documentary priority, default-disabled behavior and manual/Practice policies remain intact. AI-001C has no approved scope and is not started.
 5. Improve Live from real user feedback. As a core Live acceptance requirement, validate screen-sharing exclusion in actual Windows Teams, Zoom and Google Meet sessions before making compatibility claims. The native protection request alone is insufficient.
 6. Consider expanded Practice Mode later; do not design or implement additional exercises or AI evaluation now.
 

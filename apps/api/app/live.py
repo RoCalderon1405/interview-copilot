@@ -31,6 +31,7 @@ from fastapi import APIRouter, HTTPException, Request, WebSocket
 from pydantic import BaseModel
 
 from .retrieval import suggest_live
+from .live_generation import LiveGeneration
 from .store import KnowledgeStore
 from .textnorm import normalize
 
@@ -520,6 +521,7 @@ class LiveRuntime:
         self.max_frame_bytes = MAX_FRAME_BYTES
         self._connection_lock = threading.Lock()
         self._connection_active = False
+        self.generations: dict[str, LiveGeneration] = {}
 
     def acquire_connection(self) -> bool:
         with self._connection_lock:
@@ -546,9 +548,18 @@ def _origin_and_host_allowed(websocket: WebSocket) -> bool:
     return hostname in ALLOWED_HOSTNAMES
 
 
+async def _send_live(websocket: WebSocket, event: dict) -> None:
+    """Serialize normal and generated events on the same connection."""
+    async with websocket.state.send_lock:
+        await websocket.send_json(event)
+
+
 async def _fail(websocket: WebSocket, code: str, message: str, close_code: int = 1008) -> None:
+    generation = getattr(websocket.state, "generation", None)
+    if generation is not None:
+        await generation.close()
     try:
-        await websocket.send_json({"type": "error", "code": code, "message": message})
+        await _send_live(websocket, {"type": "error", "code": code, "message": message})
     finally:
         await websocket.close(code=close_code)
 
@@ -581,11 +592,12 @@ async def _emit_final(
     result: FeedResult,
     language: str,
     dedupe: RecentFinalDedupe,
+    generation: LiveGeneration | None = None,
 ) -> None:
     text = (result.final or "").strip()
     if not text:
         return
-    await websocket.send_json({
+    await _send_live(websocket, {
         "type": "final",
         "text": text,
         "language": language,
@@ -594,12 +606,15 @@ async def _emit_final(
     for question in detect_questions(text):
         if dedupe.seen(question):
             continue
+        if generation is not None:
+            generation.supersede()
         suggestion, retrieval_ms = await asyncio.to_thread(
             _retrieve_live, store, question, getattr(websocket.app.state, "semantic", None)
         )
-        await websocket.send_json({
+        await _send_live(websocket, {
             "type": "suggestion",
             "question": question,
+            **({"session_id": generation.session_id, "question_id": generation.question_id} if generation else {}),
             "language": language,
             "status": suggestion["status"],
             "answer": suggestion.get("answer"),
@@ -610,6 +625,8 @@ async def _emit_final(
             "retrieval_ms": retrieval_ms,
             "last_word_end_seconds": result.last_word_end_seconds,
         })
+        if generation is not None and suggestion["status"] == "no_evidence":
+            generation.submit(question)
 
 
 async def _emit_stable_partial_exact(
@@ -631,7 +648,7 @@ async def _emit_stable_partial_exact(
     suggestion, retrieval_ms = await asyncio.to_thread(_retrieve_live, store, question)
     if suggestion.get("match_type") != "exact_qa" or dedupe.seen(question):
         return
-    await websocket.send_json({
+    await _send_live(websocket, {
         "type": "suggestion",
         "question": question,
         "language": language,
@@ -702,7 +719,11 @@ async def _run_transcription(websocket: WebSocket, runtime: LiveRuntime, store: 
     _diagnostic("recognizer.ready")
     dedupe = RecentFinalDedupe(clock=runtime.clock)
     stable_partial = StablePartialQuestion()
-    await websocket.send_json({
+    generation = LiveGeneration(websocket.app.state.generation, store, grant.session_id,
+                                language, websocket.send_json, websocket.state.send_lock)
+    websocket.state.generation = generation
+    runtime.generations[grant.session_id] = generation
+    await _send_live(websocket, {
         "type": "ready",
         "session_id": grant.session_id,
         "language": language,
@@ -755,13 +776,13 @@ async def _run_transcription(websocket: WebSocket, runtime: LiveRuntime, store: 
                 )
                 return
             if result.partial:
-                await websocket.send_json({"type": "partial", "text": result.partial, "language": language})
+                await _send_live(websocket, {"type": "partial", "text": result.partial, "language": language})
                 await _emit_stable_partial_exact(
                     websocket, store, result.partial, language, stable_partial, dedupe
                 )
             if result.final:
                 stable_partial.reset()
-                await _emit_final(websocket, runtime, store, result, language, dedupe)
+                await _emit_final(websocket, runtime, store, result, language, dedupe, generation)
             continue
         text = message.get("text")
         if text is not None:
@@ -776,6 +797,7 @@ async def _run_transcription(websocket: WebSocket, runtime: LiveRuntime, store: 
             if not _is_stop_control(text):
                 await _fail(websocket, "unsupported_control", "Only stop is accepted as text")
                 return
+            await generation.close()
             try:
                 result = await asyncio.to_thread(runtime.models.finish, recognizer)
             except Exception:
@@ -829,6 +851,7 @@ def create_live_token(session_id: str, request: LiveTokenRequest, http_request: 
 
 @router.websocket("/live/transcribe")
 async def live_transcribe(websocket: WebSocket):
+    websocket.state.send_lock = asyncio.Lock()
     runtime: LiveRuntime = websocket.app.state.live
     store: KnowledgeStore = websocket.app.state.store
     if not _origin_and_host_allowed(websocket):
@@ -847,7 +870,10 @@ async def live_transcribe(websocket: WebSocket):
         except Exception:
             # Keep the boundary free of transcript/path detail and never leak a traceback to the client.
             try:
-                await websocket.send_json({
+                generation = getattr(websocket.state, "generation", None)
+                if generation is not None:
+                    await generation.close()
+                await _send_live(websocket, {
                     "type": "error",
                     "code": "internal_error",
                     "message": "The Live connection could not continue",
@@ -856,6 +882,10 @@ async def live_transcribe(websocket: WebSocket):
             except Exception:
                 pass
     finally:
+        generation = getattr(websocket.state, "generation", None)
+        if generation is not None:
+            await generation.close()
+            runtime.generations.pop(generation.session_id, None)
         # The per-connection recognizer is local to _run_transcription; this
         # finally guarantees only the shared slot is released on every path.
         runtime.release_connection()

@@ -190,24 +190,17 @@ assert GenerationService is not None
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_enabled_environment_does_not_wire_generation_into_existing_api(monkeypatch, tmp_path):
+def test_enabled_environment_composes_without_network_or_new_public_endpoint(monkeypatch, tmp_path):
     monkeypatch.setenv("COPILOT_LLM_ENABLED", "true")
     monkeypatch.setenv("COPILOT_OLLAMA_MODEL", "local")
     monkeypatch.setenv("COPILOT_DATA_DIR", str(tmp_path))
-    script = """
-import importlib.abc
-import sys
-sys.path.insert(0, sys.argv[1])
-class RejectGeneration(importlib.abc.MetaPathFinder):
-    def find_spec(self, fullname, path=None, target=None):
-        if fullname in ('app.bootstrap', 'app.application.generation') or fullname.startswith('app.infrastructure'):
-            raise AssertionError('Unexpected generation wiring: ' + fullname)
-sys.meta_path.insert(0, RejectGeneration())
-from app.main import app
-assert not hasattr(app.state, 'generation')
-assert not any('generat' in path or 'ollama' in path for path in app.openapi()['paths'])
-"""
-    result = subprocess.run([sys.executable, "-B", "-c", script,
-                             str(Path(__file__).resolve().parents[1])],
-                            capture_output=True, text=True, timeout=30, check=False)
-    assert result.returncode == 0, result.stdout + result.stderr
+    import httpx
+    from app.main import create_app
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Composition must not create a network client")
+
+    monkeypatch.setattr(httpx, "AsyncClient", forbidden)
+    app = create_app(tmp_path)
+    assert app.state.generation.available
+    assert not any('generat' in path or 'ollama' in path for path in app.openapi()['paths'])

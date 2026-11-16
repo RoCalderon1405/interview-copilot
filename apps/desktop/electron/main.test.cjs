@@ -116,3 +116,29 @@ test('packaged renderer cannot open Vite-origin capture window',async()=>{
  assert.equal(invoke(h,'live-open'),false);
  assert.equal(h.windows.length,1);
 });
+
+const generated = () => ({type:'generated_suggestion',kind:'ai_generated',session_id:'abc-123',
+  question_id:'abc-123:conn:1',question:'Explain caching?',language:'en-US',answer:'Practical answer.',
+  provider:'ollama',model:'local',source:null});
+test('generated event is allowlisted, bounded and cannot carry documentary provenance',async()=>{
+  const h=await boot();invoke(h,'live-open');const c=h.windows[1];
+  const publish=h.listeners.get('copilot:live-packet');
+  const initial=invoke(h,'live-state').events.length;
+  publish(e(h.window),generated()); // wrong window
+  publish({...e(c),senderFrame:{url:c.webContents.mainFrame.url}},generated()); // subframe
+  for(const patch of [{source:{document_name:'fake'}},{kind:'exact_qa'},{match_type:'exact_qa'},
+    {status:'found'},{provider:'cloud'},{model:''},{question:''},{answer:''},{answer:'x'.repeat(2001)},
+    {question:'x'.repeat(3001)},{session_id:''},{question_id:'other:1'},{language:'fr-FR'}]) {
+    publish(e(c),{...generated(),...patch});
+  }
+  assert.equal(invoke(h,'live-state').events.length,initial);
+  publish(e(c),{...generated(),type:'suggestion',status:'found',match_type:'exact_qa'});
+  assert.equal(invoke(h,'live-state').events.length,initial);
+  publish(e(c),{...generated(),audio:'secret',credentials:'secret'});
+  const accepted=invoke(h,'live-state').events.at(-1);
+  assert.deepEqual(JSON.parse(JSON.stringify(accepted)),generated());
+  assert.equal(accepted.source,null);
+  assert.equal(h.window.webContents.sent.at(-1).data.type,'generated_suggestion');
+  for(let i=0;i<100;i++) publish(e(c),generated());
+  assert.equal(invoke(h,'live-state').events.length,80);
+});

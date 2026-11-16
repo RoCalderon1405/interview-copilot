@@ -11,7 +11,10 @@ export type LiveEvent =
   | {type: 'partial'; text: string}
   | {type: 'final'; text: string}
   | {type: 'metrics'; frames: number}
+  | {type: 'generated_suggestion'; kind: 'ai_generated'; session_id: string; question_id: string;
+      question: string; language: 'en-US' | 'es-MX'; answer: string; provider: 'ollama'; model: string; source: null}
   | {type: 'suggestion'; question: string; status: 'found' | 'no_evidence';
+      session_id?: string; question_id?: string;
       answer: string | null; match_type: 'exact_qa' | 'semantic_qa' | null;
       matched_question: string; source: Source | null};
 

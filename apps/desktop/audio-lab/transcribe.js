@@ -164,7 +164,8 @@ start.addEventListener('click', async () => {
     socket.onmessage = event => {
       let packet;
       try { packet = JSON.parse(event.data); } catch { return; }
-      if (['partial','final','suggestion'].includes(packet.type)) publish(packet);
+      if (packet.type === 'generated_suggestion' && stopping) return;
+      if (['partial','final','suggestion','generated_suggestion'].includes(packet.type)) publish(packet);
       if (packet.type === 'ready') {
         if (packet.sample_rate !== 16000 || packet.sample_format !== 'pcm_s16le' || packet.channels !== 1) {
           void fail(new Error('El formato requerido por el backend es diferente'));

@@ -5,6 +5,7 @@ import {
   Send, Settings, Shield, Sparkles, Trash2, UploadCloud, WifiOff, X,
 } from 'lucide-react';
 import { api } from './api';
+import {LiveSuggestion, type LiveSuggestionEvent} from './features/live/LiveSuggestion';
 import type { AnswerResponse, DocumentRecord, Feedback, LiveEvent, PracticeQuestion, Session, SessionReport } from './types';
 
 type Page = 'overview' | 'knowledge' | 'practice' | 'live' | 'settings';
@@ -231,12 +232,12 @@ function Live({showError}: {showError:(e:unknown)=>void}) {
     catch (error) {showError(error);}
     finally {setBusy(false);}
   };
-  const suggestions = events.filter((event): event is Extract<LiveEvent,{type:'suggestion'}> => event.type === 'suggestion').slice(-20).reverse();
+  const suggestions = events.filter((event): event is LiveSuggestionEvent => event.type === 'suggestion' || event.type === 'generated_suggestion').slice(-20).reverse();
   const transcript = events.filter((event): event is Extract<LiveEvent,{type:'final'}> => event.type === 'final').slice(-20).reverse();
   const mostRecentStatus = [...events].reverse().find(event => event.type === 'status' || event.type === 'error');
   return <>
     <div className="page-header"><div><div className="eyebrow">LIVE INTERVIEW · LOCAL</div><h1>Live Interview</h1>
-      <p className="page-description">Captura audio de Windows con consentimiento, detecta preguntas y muestra respuestas de documentos locales.</p>
+      <p className="page-description">Captura audio con consentimiento y prioriza documentos locales. Si Ollama está habilitado, puede sugerir respuestas de IA sin respaldo documental.</p>
     </div><span className="page-icon"><Headphones size={22}/></span></div>
     <div className="panel live-control-panel">
       <div className="panel-title"><h2>Audio del sistema</h2><span className="hint">Electron → Vosk → Q&A</span></div>
@@ -251,16 +252,8 @@ function Live({showError}: {showError:(e:unknown)=>void}) {
       <p className="small-muted" role="status">{mostRecentStatus?.type === 'status' || mostRecentStatus?.type === 'error' ? mostRecentStatus.text : 'La captura está detenida.'}</p>
     </div>
     <div className="live-results">
-      <section className="panel live-suggestions"><div className="panel-title"><h2>Preguntas y respuestas</h2><span className="hint">Exactas o posibles coincidencias semánticas</span></div>
-        {suggestions.length ? suggestions.map((item,index) => <div className="live-result" key={`${item.question}-${index}`}>
-          <strong>{item.question}</strong>
-          <span className={`live-result-label ${item.status === 'found' ? 'matched' : ''}`}>
-            {item.match_type === 'exact_qa' ? 'Respuesta exacta del documento' : item.match_type === 'semantic_qa' ? 'Posible respuesta semántica — revisar' : 'Sin respuesta suficientemente relacionada'}
-          </span>
-          {item.match_type === 'semantic_qa' && item.matched_question && <span className="small-muted">Pregunta guardada: {item.matched_question}</span>}
-          {item.answer && <p>{item.answer}</p>}
-          {item.source && <div className="small-muted">Fuente: {item.source.document_name} · {item.source.location}</div>}
-        </div>) : <p className="small-muted">Las preguntas detectadas aparecerán aquí cuando se reciba audio.</p>}
+      <section className="panel live-suggestions"><div className="panel-title"><h2>Preguntas y respuestas</h2><span className="hint">Documentos o sugerencias de IA identificadas</span></div>
+        {suggestions.length ? suggestions.map((item,index) => <LiveSuggestion item={item} key={`${item.type}-${item.question_id ?? item.question}-${index}`}/>) : <p className="small-muted">Las preguntas detectadas aparecerán aquí cuando se reciba audio.</p>}
       </section>
       <section className="panel live-transcript"><div className="panel-title"><h2>Transcripción</h2><span className="hint">Vosk · tiempo real</span></div>
         {partial && <p className="live-partial">{partial}</p>}

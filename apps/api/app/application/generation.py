@@ -100,6 +100,11 @@ class GenerationService:
         self._enabled = enabled
         self._timeout_seconds = timeout_seconds
 
+    @property
+    def available(self) -> bool:
+        """Report opt-in provider presence without contacting the provider."""
+        return self._enabled is True and self._provider is not None
+
     async def generate(self, question: str, language: GenerationLanguage) -> GeneratedSuggestion:
         """Generate only after explicit enablement; errors never fabricate an answer."""
         if self._enabled is False:

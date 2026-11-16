@@ -2,17 +2,18 @@
 
 Interview Copilot is a local Windows desktop application for AI-assisted technical interviews. **Live Mode is the primary product:** explicitly authorized system audio → English/Spanish Vosk transcription → conversational question detection → document-backed answers with sources. Screen-sharing exclusion while remaining visible locally is a core requirement, not a guaranteed capability.
 
-Expanded Practice Mode is a future enhancement. The existing basic Practice page provides document questions, lexical keyword feedback and session reports; it is not an AI interview evaluator. Live LLM fallback is planned, **not integrated**; AI-001A adds an independently callable local generation foundation only.
+Expanded Practice Mode is a future enhancement. The existing basic Practice page provides document questions, lexical keyword feedback and session reports; it is not an AI interview evaluator. Automatic local Ollama fallback is implemented for final Live questions/instructions, **disabled by default and pending real-Ollama/Windows acceptance**.
 
 ## Current status and stack
 
-Electron 39, React/TypeScript, Python/FastAPI, Vosk EN/ES, SQLite/FTS5 and optional local multilingual FastEmbed. An opt-in Ollama HTTP adapter exists separately from Live; no vector DB service is implemented.
+Electron 39, React/TypeScript, Python/FastAPI, Vosk EN/ES, SQLite/FTS5, optional local multilingual FastEmbed and opt-in local Ollama fallback. No vector DB service is implemented.
 
 - **VALIDATED by the owner in the isolated Windows lab:** system audio, PCM streaming, Vosk English transcription, conversational question detection, source-backed exact Q&A and local semantic retrieval with 204 indexed questions. This is validation history, not a benchmark or a bundled database.
 - **IMPLEMENTED / PENDING VALIDATION:** main React Live integration using an isolated capture-controls window. Complete Windows acceptance is still pending.
 - **IMPLEMENTED / PENDING VALIDATION:** Spanish transcription support; complete integrated validation is not established.
 - **IMPLEMENTED / PENDING VALIDATION:** native content-protection controls; compatibility with Teams, Zoom and Google Meet is unverified.
-- **PLANNED:** LLM fallback and packaged production capture. Packaged capture is currently disabled intentionally.
+- **IMPLEMENTED / PENDING VALIDATION:** automatic local Ollama fallback, verified with fake providers/mocked HTTP only; real EN/ES quality, latency and concurrent audio acceptance remain pending.
+- **PLANNED:** packaged production capture, currently disabled intentionally.
 
 See [Live acceptance and limitations](docs/live-mode.md), [current architecture and target direction](docs/architecture.md), [priorities](docs/roadmap.md) and [engineering rules](AGENTS.md). Clean Architecture is the approved incremental backend direction, not a completed refactor; desktop boundaries will be feature-based.
 
@@ -65,7 +66,7 @@ Knowledge Base supports upload, list and delete for PDF, DOCX, XLSX, UTF-8 TXT a
 - XLSX recognizes EN/ES question/answer columns; rows without a recognized header are treated as text fragments.
 - TXT/Markdown recognizes `Q:`/`A:`, `Question:`/`Answer:` or `Pregunta:`/`Respuesta:` blocks; otherwise it creates fragments. When Q&A blocks exist, surrounding prose is not separately indexed.
 
-Manual text queries (`POST /answers`, including the manual box on the Live page) use normalized exact Q&A first, then SQLite FTS5 with lexical scoring for similar Q&A or excerpts. Automatic Live retrieval uses **exact Q&A first, then optional semantic Q&A only**; it does not search document fragments. Semantic candidates include sources and require review, not factual verification. Without sufficient evidence, no answer is generated.
+Manual text queries (`POST /answers`, including the manual box on the Live page) use normalized exact Q&A first, then SQLite FTS5 with lexical scoring for similar Q&A or excerpts. Automatic Live retrieval uses **exact Q&A first, then optional semantic Q&A**; it does not search document fragments. Semantic candidates include sources and require review, not factual verification. If neither returns a suitable suggestion, only explicitly enabled/configured Ollama may generate a separate unverified suggestion. Disabled, unavailable or failed generation preserves the existing no-evidence result. Missing/unavailable semantic retrieval can also yield no evidence; no semantic policy is changed.
 
 Imported wording is not LLM-rewritten, but extraction normalizes whitespace and limits field length; the main-window IPC also limits displayed answer length. Exact means normalized question matching, not a certification that the document is correct or that formatting is preserved.
 
@@ -93,9 +94,9 @@ curl.exe -X POST http://127.0.0.1:8765/semantic/index -H "Content-Type: applicat
 
 The configured model is `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`. Only extracted Q&A questions receive embeddings; vectors stay in SQLite. Indexing is incremental and separate from capture. Live never downloads models or indexes automatically.
 
-## Optional local generation foundation (AI-001A)
+## Optional automatic local generation (AI-001A / AI-001B)
 
-**IMPLEMENTED, not integrated into Live, Practice or any public endpoint.** `app.bootstrap.create_generation_service()` explicitly composes an independent async service; `await service.generate(question, language)` accepts only `en-US` or `es-MX`. Neither application startup nor setting environment variables invokes it automatically. The backend does not auto-load `.env`.
+**IMPLEMENTED in Live, disabled by default; not used by Practice or manual search.** FastAPI composes one `GenerationService` with `app.bootstrap.create_generation_service()` without network I/O. After a deduplicated final question/instruction has no exact or accepted semantic suggestion, Live schedules `service.generate(question, language)` with `en-US` or `es-MX`. Never generates from partials or after a documentary answer. There is no new public endpoint. The backend does not auto-load `.env`; set the variables before starting/restarting it. Invalid optional configuration disables fallback without preventing API/capture startup.
 
 - `COPILOT_LLM_ENABLED`: defaults to `false`; only `true`/`1` enables the factory (`false`/`0` disables it).
 - `COPILOT_OLLAMA_MODEL`: required explicit identifier of an approved, already installed **local** model; no default, installation, model pull or cloud fallback.
@@ -105,7 +106,11 @@ The configured model is `sentence-transformers/paraphrase-multilingual-MiniLM-L1
 - Non-streaming output: 256-token budget, at most 2000 answer characters and 64 KiB HTTP response. Empty, malformed, oversized, tool-call or token-truncated responses fail closed. `GenerationError.code` identifies disabled/configuration/input/provider/timeout/response failures; no fabricated answer replaces errors, and caller cancellation propagates.
 - Results carry `kind="ai_generated"`, configured provider/model and `source=None`: an **unverified suggestion**, never documentary evidence. Fixed instructions prefer 3–5 natural, professional sentences in B2 English or natural Spanish, practical examples, uncertainty and no invented personal experience. User text stays in a separate user message. Instructions are defense-in-depth, not a guarantee of model compliance; no execution capabilities are provided.
 
-Mocked tests validate contracts, not real model quality, latency or Windows operation. No Ollama installation/model download was performed for this task. AI-001B still needs automatic fallback policy, asynchronous Live coordination/cancellation, bounded concurrency, distinct WS/IPC/UI provenance and real Windows acceptance. Do not change an existing database or reindex to validate this foundation.
+Generation runs outside the PCM/Vosk reception loop: one active request per Live connection/session and one replaceable latest pending question, never an accumulating queue. A newer final question invalidates older work even if it has a documentary answer. Stop, disconnect, errors and session finish cancel/suppress pending results; the final recognizer flush on stop remains documentary-only. Cancellation is client-side/best-effort for Ollama's internal inference; the application waits for request cleanup before starting the next call.
+
+The additive `generated_suggestion` event includes `kind`, `session_id`, unique connection-scoped `question_id`, original detected `question`, `language`, `answer`, `provider`, `model` and `source:null`; it never uses documentary `status`/`match_type`. Final documentary suggestion events also carry correlation IDs. The existing capture relay forwards generated events (not after stop begins); Electron validates bounded fields and trusted senders, strips extras and keeps the 80-event history limit. React displays **“Sugerencia generada por IA — revisar”**, provider/model and “Sin respaldo documental”, separately from documentary cards. Content is rendered as text, not HTML. On generation failure, the no-evidence card remains and audio continues.
+
+Mocked tests validate contracts, not real model quality, latency or Windows operation. No Ollama installation/model download was performed for these tasks. Follow the [pending Ollama/Windows acceptance checklist](docs/live-mode.md#automatic-ollama-fallback--manual-acceptance-pending-ai-001b) with an approved existing local model; preserve the database/cache without reindexing. Existing capture and conferencing-exclusion acceptance is still required; packaged capture remains disabled.
 
 ## Screen-sharing and privacy
 
@@ -120,6 +125,7 @@ Run each block from the project root (separate terminals or return to the root b
 ```bat
 cd apps\desktop
 npm run test:electron
+npm run test:ui
 npm run test:audio
 npm run lint:electron
 npm run build

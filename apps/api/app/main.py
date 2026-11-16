@@ -1,6 +1,7 @@
 """Local API for the Interview Copilot development vertical slice."""
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 from typing import Literal
@@ -11,6 +12,8 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from .application.generation import GenerationError, GenerationService
+from .bootstrap import create_generation_service
 from .live import LiveRuntime, router as live_router
 from .parsers import SUPPORTED_EXTENSIONS, parse_file
 from .retrieval import assess_answer, suggest, build_session_report
@@ -68,6 +71,11 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     application.state.store = store
     application.state.semantic = SemanticIndex(store)
     application.state.live = LiveRuntime()
+    try:
+        application.state.generation = create_generation_service()
+    except GenerationError:
+        # Invalid optional configuration must not prevent capture/API startup.
+        application.state.generation = GenerationService()
     application.include_router(live_router)
 
     @application.get("/health")
@@ -143,14 +151,19 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         return result
 
     @application.post("/sessions/{session_id}/finish")
-    def finish_session(session_id: str):
+    async def finish_session(session_id: str):
+        generation = application.state.live.generations.get(session_id)
+        if generation is not None:
+            await generation.close()
         try:
-            finished = store.finish_session(session_id)
+            finished = await asyncio.to_thread(store.finish_session, session_id)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         if not finished:
             raise HTTPException(status_code=404, detail="Session not found")
-        return build_session_report(store.get_session(session_id), store.session_reviews(session_id))
+        session = await asyncio.to_thread(store.get_session, session_id)
+        reviews = await asyncio.to_thread(store.session_reviews, session_id)
+        return build_session_report(session, reviews)
 
     @application.get("/sessions/{session_id}/report")
     def session_report(session_id: str):

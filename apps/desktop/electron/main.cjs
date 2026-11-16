@@ -32,7 +32,20 @@ function safeLiveEvent(raw) {
   if (raw.type === 'partial' || raw.type === 'final')
     return {type: raw.type, text: cleanText(raw.text)};
   if (raw.type === 'error') return {type:'error', text:cleanText(raw.text, 240)};
+  if (raw.type === 'generated_suggestion') {
+    const bounded = (value, max) => typeof value === 'string' && value.trim().length > 0 && value.length <= max;
+    if (raw.kind !== 'ai_generated' || raw.source !== null || raw.provider !== 'ollama' ||
+        raw.match_type != null || raw.status != null || !['en-US','es-MX'].includes(raw.language) ||
+        !bounded(raw.question,3000) || !bounded(raw.answer,2000) || !bounded(raw.model,200) ||
+        !bounded(raw.session_id,80) || !/^[a-zA-Z0-9-]+$/.test(raw.session_id) ||
+        !bounded(raw.question_id,160) || !raw.question_id.startsWith(raw.session_id + ':') ||
+        !/^[a-zA-Z0-9:-]+$/.test(raw.question_id)) return null;
+    return {type:'generated_suggestion',kind:'ai_generated',source:null,provider:'ollama',
+      model:raw.model,session_id:raw.session_id,question_id:raw.question_id,
+      question:raw.question,language:raw.language,answer:raw.answer};
+  }
   if (raw.type === 'suggestion') {
+    if (raw.kind === 'ai_generated' || raw.provider != null || raw.model != null) return null;
     const hasAnswer = raw.status === 'found' && typeof raw.answer === 'string' && raw.answer.trim();
     const matchType = ['exact_qa','semantic_qa'].includes(raw.match_type) ? raw.match_type : null;
     const source = raw.source && typeof raw.source === 'object' && !Array.isArray(raw.source)
@@ -43,6 +56,8 @@ function safeLiveEvent(raw) {
       answer: hasAnswer && matchType ? cleanText(raw.answer, 10000) : null,
       match_type: hasAnswer && matchType ? matchType : null,
       matched_question: cleanText(raw.matched_question), source,
+      ...(typeof raw.session_id === 'string' && typeof raw.question_id === 'string'
+        ? {session_id:cleanText(raw.session_id,80),question_id:cleanText(raw.question_id,160)} : {}),
     };
   }
   return null;

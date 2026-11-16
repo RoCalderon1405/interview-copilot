@@ -11,6 +11,7 @@
     "preview": "vite preview --host 127.0.0.1",
     "lint:electron": "node --check electron/main.cjs && node --check electron/preload.cjs && node --check electron/capture-preload.cjs && node --check audio-lab/main.cjs && node --check audio-lab/renderer.js && node --check audio-lab/transcribe.js && node --check audio-lab/pcm-processor.js",
     "test:electron": "node --test electron/main.test.cjs",
+    "test:ui": "node --test src/features/live/LiveSuggestion.test.cjs",
     "lab:audio": "electron ./audio-lab",
     "lab:transcribe": "concurrently -k -n web,stt \"vite --host 127.0.0.1 --strictPort\" \"wait-on http://127.0.0.1:5173/audio-lab/transcribe.html && electron ./audio-lab --transcribe\"",
     "test:audio": "node --test audio-lab/pcm-processor.test.cjs"

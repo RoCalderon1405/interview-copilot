@@ -22,19 +22,21 @@ FastAPI localhost:8765
     ├── local Vosk EN/ES STT via /live/transcribe
     ├── heuristic conversational question extraction
     ├── exact Q&A → optional semantic FastEmbed candidates in SQLite
-    └── answer + provenance, or explicit no-evidence
+    ├── answer + provenance, or explicit no-evidence
+    └── final no-evidence + explicit opt-in → async local Ollama → separate AI suggestion
 ```
 
 ### Module responsibilities today
 
-- `apps/api/app/main.py`: application composition, HTTP schemas/routes, upload handling and origin/host restrictions.
+- `apps/api/app/main.py`: application composition (including one optional generation service), HTTP schemas/routes, upload handling and origin/host restrictions. Session finish suppresses/drains that session's generation before returning its existing report.
 - `live.py`: token lifecycle, single active transcription slot, Vosk cache, heuristic EN/ES detector, deduplication, WebSocket protocol and retrieval coordination. Stable repeated partials permit early exact lookup; finals permit exact/semantic lookup.
 - `domain/knowledge.py`: framework-independent frozen `ParsedEntry` dataclass, shared by parsing and persistence (ARCH-003).
 - `domain/text.py`: the existing mutable `STOPWORDS` set, shared directly by persistence and retrieval (ARCH-004). Both legacy module imports reference this same object; its content is unchanged. `textnorm.py` remains unchanged and pure.
 - `application/ports.py`: `RetrievalReader`, a structural Protocol exposing only `find_exact_qa` and `find_matches` (ARCH-005). It preserves existing dictionary rows and requires no framework or concrete storage implementation.
 - `application/generation.py`: independent `GenerationService`, typed `GenerationProvider` port, fixed EN/ES instructions, bounded deadline/input/output and immutable AI-generated provenance with no documentary source (AI-001A). No HTTP/framework dependency or retrieval change.
 - `infrastructure/ollama.py`: local-only non-streaming chat HTTP adapter using runtime `httpx`; no proxies, redirects, retries, credentials, tools or model pulls. Validates bounded completed assistant output; provider payloads are not exposed as error messages.
-- `bootstrap.py`: explicit opt-in generation factory. It performs no network I/O and is deliberately **not called by `main.py` or Live**. Configuration and limits are documented in [README](../README.md#optional-local-generation-foundation-ai-001a).
+- `bootstrap.py`: opt-in generation factory, called once by `main.py` without network I/O. Invalid optional configuration degrades to a disabled service. Configuration and limits are documented in [README](../README.md#optional-automatic-local-generation-ai-001a--ai-001b).
+- `live_generation.py`: connection-scoped generation coordinator, outside the PCM/Vosk loop (AI-001B). One active call and one replaceable latest pending question; revisions plus session/connection/question IDs suppress stale results. Replacement, stop, disconnect, error and HTTP session finish invalidate/cancel work. All WS event sends share a lock; generation failures preserve no-evidence and do not terminate capture. Request cancellation cannot guarantee instant termination of Ollama's internal inference.
 - `parsers.py`: format-specific extraction into Q&A or text fragments, with source locations and resource limits. Re-exports the same Domain `ParsedEntry` class for compatibility.
 - `store.py`: local document files, SQLite schema, entries, FTS5, vectors and Live/Practice session persistence. Imports `ParsedEntry` directly from Domain, not from the document parsers.
 - `retrieval.py`: exact and manual lexical retrieval, Live retrieval policy, plus existing lexical Practice assessment/reporting. Storage type dependencies use `RetrievalReader`; this module no longer imports `KnowledgeStore`.
@@ -52,7 +54,7 @@ ARCH-004 moved stopwords out of persistence without changing filtering behavior.
 See [README document limitations](../README.md#documents-and-retrieval) for extraction by format. A supported import is not a promise of Q&A extraction: PDF fragments, for example, are not Live answer candidates.
 
 - Manual `POST /answers`: normalized exact Q&A first, then FTS5 candidates with lexical scoring for similar Q&A/excerpts. The manual Live text box uses this same endpoint, not semantic Live retrieval.
-- Automatic Live: normalized exact Q&A first, then optional semantic Q&A; otherwise `no_evidence`. Semantic is a possible stored answer to review, not verified truth. No LLM generates Live answers; AI-001A's independent service is not wired into this flow.
+- Automatic Live: normalized exact Q&A first, then optional semantic Q&A; otherwise `no_evidence`. Semantic is a possible stored answer to review, not verified truth. Only after final no-evidence, an enabled/configured local service may generate a separately labeled suggestion. Missing/unavailable semantic candidates also return no evidence; algorithms and priorities are unchanged. Partials and stop-flush finals never trigger generation.
 - Import stores original files, extracted entries and FTS rows. Extraction normalizes whitespace and limits field length; main-window IPC additionally limits answer length. Do not promise byte-for-byte original formatting or unlimited answers.
 - Embeddings cover Q&A questions only. Indexing is explicit; new imports remain pending until indexed. Model download requires `allow_download: true`; Live never downloads or indexes automatically.
 - Deletion removes entries/FTS/vectors and linked Practice answers. No in-place document update API exists. Filesystem and SQLite changes are not one atomic transaction; concurrent deletion/indexing guarantees need further tests before claiming them.
@@ -64,6 +66,8 @@ Main Electron session explicitly denies display/microphone capture. The separate
 The capture page uses Vite `http://127.0.0.1:5173`; PCM16 mono at 16 kHz goes directly to `ws://127.0.0.1:8765/live/transcribe`. Tokens are ephemeral, single-use and sent in the start message. WS validates Origin/Host independently of HTTP CORS. HTTP allows development origins and requests without Origin; these controls do not authenticate other local processes. Packaged capture is disabled pending separate bootstrap/authentication/origin validation; do not allow `file://`/`null` origins as a shortcut.
 
 IPC checks the window/frame/URL and allowlists bounded text/status/suggestion/metric fields; raw audio and credentials are not relayed. Live transcripts and audio are not persisted. Main-process history is capped at 80 events, and React also bounds its history; the auxiliary lab DOM currently accumulates results until reset. SQLite persists documents, vectors and session metadata; basic Practice also persists submitted answers.
+
+AI-001B adds `generated_suggestion` with `kind:ai_generated`, `session_id`, connection-scoped `question_id`, detected `question`, `language`, bounded `answer`, `provider:ollama`, configured `model` and `source:null`. Documentary final suggestion events retain their contract plus additive correlation IDs. Generated events have no documentary `status`/`match_type`; IPC rejects mixed provenance, invalid fields and untrusted senders. React renders AI text separately with a review warning and no documentary attribution. Only the detected question/language plus fixed instructions reach loopback Ollama; no full transcript/history/documents/audio, tools or credentials. Nothing generated is stored in SQLite or persistent application logs. Ollama must be separately configured for local-only operation; fixed prompts cannot guarantee model compliance or factuality.
 
 ### Screen-sharing exclusion
 
@@ -89,6 +93,6 @@ Dependencies point inward: domain imports no frameworks/adapters; application de
 
 For desktop, progressively separate `src/app`, `src/features/{live,knowledge,practice,settings}` and genuinely shared HTTP/bridge/UI modules. Electron should separate window lifecycle, permission/protection policies, IPC validation/handlers and preloads. Business coordination should not be embedded in JSX or platform handlers. Do not mechanically reproduce backend layers in React.
 
-Exact filenames and extraction order still need task-level approval. Prefer a few cohesive modules, hooks/reducers and concrete required ports over generic repositories, a DI framework, global state dependency or an interface for every class. Preserve the lab and existing Practice behavior; Live LLM integration and expanded Practice remain future work. The only current generation adapter is the independent local Ollama foundation.
+Exact filenames and extraction order still need task-level approval. Prefer a few cohesive modules, hooks/reducers and concrete required ports over generic repositories, a DI framework, global state dependency or an interface for every class. Preserve the lab and existing Practice behavior; expanded Practice remains future work. The only current generation adapter is local Ollama, now optionally integrated with Live; real provider/Windows acceptance is pending.
 
 Validate main Live first, then extract one responsibility per task with contract/regression tests and Windows acceptance where audio, IPC, lifecycle or protection is affected. Separate behavior fixes from moves. See [roadmap](roadmap.md) and [engineering rules](../AGENTS.md).
