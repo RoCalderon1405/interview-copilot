@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from difflib import SequenceMatcher
 
+from .application.ports import RetrievalReader
 from .domain.text import STOPWORDS as STOPWORDS  # Preserve the public retrieval import.
-from .store import KnowledgeStore
 from .textnorm import normalize  # re-exported: retrieval.normalize stays importable
 
 
@@ -16,7 +16,7 @@ def overlap(left: str, right: str) -> float:
     return len(a & b) / max(1, len(a))
 
 
-def _exact_qa(store: KnowledgeStore, question: str) -> dict | None:
+def _exact_qa(store: RetrievalReader, question: str) -> dict | None:
     """Return the stored literal Q&A only when its normalized question matches exactly."""
     row = store.find_exact_qa(question)
     if row is None:
@@ -30,7 +30,7 @@ def _exact_qa(store: KnowledgeStore, question: str) -> dict | None:
     }
 
 
-def suggest(store: KnowledgeStore, question: str) -> dict:
+def suggest(store: RetrievalReader, question: str) -> dict:
     """Answer from the stored literal Q&A when the question matches exactly.
 
     The normalized exact match runs BEFORE the bounded FTS candidate search:
@@ -68,7 +68,7 @@ def suggest(store: KnowledgeStore, question: str) -> dict:
     }
 
 
-def suggest_live(store: KnowledgeStore, question: str, semantic=None) -> dict:
+def suggest_live(store: RetrievalReader, question: str, semantic=None) -> dict:
     """Live: exact answer first, then an explicitly labeled semantic candidate.
 
     A semantic match is never presented as verified Q&A. With no local model or

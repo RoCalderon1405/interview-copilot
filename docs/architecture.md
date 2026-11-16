@@ -31,9 +31,10 @@ FastAPI localhost:8765
 - `live.py`: token lifecycle, single active transcription slot, Vosk cache, heuristic EN/ES detector, deduplication, WebSocket protocol and retrieval coordination. Stable repeated partials permit early exact lookup; finals permit exact/semantic lookup.
 - `domain/knowledge.py`: framework-independent frozen `ParsedEntry` dataclass, shared by parsing and persistence (ARCH-003).
 - `domain/text.py`: the existing mutable `STOPWORDS` set, shared directly by persistence and retrieval (ARCH-004). Both legacy module imports reference this same object; its content is unchanged. `textnorm.py` remains unchanged and pure.
+- `application/ports.py`: `RetrievalReader`, a structural Protocol exposing only `find_exact_qa` and `find_matches` (ARCH-005). It preserves existing dictionary rows and requires no framework or concrete storage implementation.
 - `parsers.py`: format-specific extraction into Q&A or text fragments, with source locations and resource limits. Re-exports the same Domain `ParsedEntry` class for compatibility.
 - `store.py`: local document files, SQLite schema, entries, FTS5, vectors and Live/Practice session persistence. Imports `ParsedEntry` directly from Domain, not from the document parsers.
-- `retrieval.py`: exact and manual lexical retrieval, Live retrieval policy, plus existing lexical Practice assessment/reporting.
+- `retrieval.py`: exact and manual lexical retrieval, Live retrieval policy, plus existing lexical Practice assessment/reporting. Storage type dependencies use `RetrievalReader`; this module no longer imports `KnowledgeStore`.
 - `semantic.py`: optional local FastEmbed model, explicit incremental indexing, similarity/margin abstention and stored-answer candidates.
 - `apps/desktop/src/App.tsx`: shell, pages, UI state and coordination; `api.ts`/`types.ts`: HTTP client and TypeScript contracts.
 - `electron/main.cjs`: windows, permissions, protection, sender validation, IPC sanitization and bounded event history. Preloads expose narrow bridges.
@@ -41,7 +42,7 @@ FastAPI localhost:8765
 
 ARCH-003 extracts only the shared record, preserving its five fields, constructor, equality and immutability. Domain uses only the standard library; persistence no longer loads PDF/Office libraries through its entry type. Parsing algorithms, storage, retrieval and Live behavior are unchanged. This is the first small extraction, not a fully layered Clean Architecture backend or a feature-separated desktop.
 
-ARCH-004 removes retrieval's dependency on persistence for stopwords only; retrieval still uses `KnowledgeStore`. Filtering algorithms, normalization, scores, thresholds and existing Practice feedback remain unchanged. This does not complete application/infrastructure separation.
+ARCH-004 moved stopwords out of persistence without changing filtering behavior. ARCH-005 replaces retrieval's concrete storage type dependency with the application read port; `KnowledgeStore` implements it structurally without inheritance, wrappers or SQL changes. Existing functions, dictionaries, exact/lexical/semantic priorities, scores, thresholds and Practice feedback remain unchanged. Other modules still use concrete adapters; application/infrastructure separation is not complete.
 
 ### Documents, retrieval and consistency
 

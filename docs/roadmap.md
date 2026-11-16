@@ -6,7 +6,7 @@ Live Mode is the primary product. This order reflects the owner's priorities, no
 
 This file is the single lightweight task board; [Live Mode](live-mode.md) holds validation evidence and known limitations, not a second task list.
 
-**Current task: ARCH-004**, completed in this update: all 45 stopwords retain their mutable set type and shared public-import identity in Domain. Twelve focused regression cases and all 176 backend tests passed without skips. **DET-001** remains implemented but not fully accepted; no next extraction has started.
+**Current task: ARCH-005**, completed in this update: retrieval depends on the two-method `RetrievalReader` application port, not concrete storage. In-memory and SQLite compatibility checks passed, along with 33 focused tests and all 188 backend tests, without skips. **DET-001** remains implemented but not fully accepted; no next extraction has started.
 
 | ID | Description | Status | Commit reference |
 | --- | --- | --- | --- |
@@ -20,7 +20,8 @@ This file is the single lightweight task board; [Live Mode](live-mode.md) holds 
 | LIVE-001 | Complete integrated Live Windows acceptance | Partially validated | `540c27d` (integration, not acceptance) |
 | ARCH-002 | Incremental backend Clean Architecture plan; planning only | Completed | — |
 | ARCH-003 | Extract ParsedEntry into Domain with compatible public imports | Completed; contracts, backend suite and Windows startup verified | `6b8cc0b` |
-| ARCH-004 | Separate stopword policy from persistence with compatible public imports | Completed; identity, import independence and lexical regressions verified | — |
+| ARCH-004 | Separate stopword policy from persistence with compatible public imports | Completed; identity, import independence and lexical regressions verified | `7464c11` |
+| ARCH-005 | Decouple retrieval from concrete storage through a minimal read port | Completed; in-memory behavior, import independence and existing store compatibility verified | — |
 | AI-001 | Decide and implement an approved LLM fallback | Pending; not implemented | — |
 | DET-002 | Further contextual detection beyond DET-001; scope requires approval | Deferred | — |
 
