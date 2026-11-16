@@ -30,6 +30,7 @@ FastAPI localhost:8765
 - `apps/api/app/main.py`: application composition, HTTP schemas/routes, upload handling and origin/host restrictions.
 - `live.py`: token lifecycle, single active transcription slot, Vosk cache, heuristic EN/ES detector, deduplication, WebSocket protocol and retrieval coordination. Stable repeated partials permit early exact lookup; finals permit exact/semantic lookup.
 - `domain/knowledge.py`: framework-independent frozen `ParsedEntry` dataclass, shared by parsing and persistence (ARCH-003).
+- `domain/text.py`: the existing mutable `STOPWORDS` set, shared directly by persistence and retrieval (ARCH-004). Both legacy module imports reference this same object; its content is unchanged. `textnorm.py` remains unchanged and pure.
 - `parsers.py`: format-specific extraction into Q&A or text fragments, with source locations and resource limits. Re-exports the same Domain `ParsedEntry` class for compatibility.
 - `store.py`: local document files, SQLite schema, entries, FTS5, vectors and Live/Practice session persistence. Imports `ParsedEntry` directly from Domain, not from the document parsers.
 - `retrieval.py`: exact and manual lexical retrieval, Live retrieval policy, plus existing lexical Practice assessment/reporting.
@@ -39,6 +40,8 @@ FastAPI localhost:8765
 - `audio-lab/transcribe.js` and `pcm-processor.js`: consent-driven capture, Web Audio lifecycle, PCM conversion, local HTTP/WS and lab display. The integration reuses these files rather than a rewritten capture engine.
 
 ARCH-003 extracts only the shared record, preserving its five fields, constructor, equality and immutability. Domain uses only the standard library; persistence no longer loads PDF/Office libraries through its entry type. Parsing algorithms, storage, retrieval and Live behavior are unchanged. This is the first small extraction, not a fully layered Clean Architecture backend or a feature-separated desktop.
+
+ARCH-004 removes retrieval's dependency on persistence for stopwords only; retrieval still uses `KnowledgeStore`. Filtering algorithms, normalization, scores, thresholds and existing Practice feedback remain unchanged. This does not complete application/infrastructure separation.
 
 ### Documents, retrieval and consistency
 

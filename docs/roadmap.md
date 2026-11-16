@@ -6,7 +6,7 @@ Live Mode is the primary product. This order reflects the owner's priorities, no
 
 This file is the single lightweight task board; [Live Mode](live-mode.md) holds validation evidence and known limitations, not a second task list.
 
-**Current task: ARCH-003**, completed in this update: `ParsedEntry` now lives in Domain with compatible public imports. Six focused contract tests and all 164 backend tests passed without skips; real Windows API startup was verified with temporary storage. **DET-001** remains implemented but not fully accepted; no next extraction has started.
+**Current task: ARCH-004**, completed in this update: all 45 stopwords retain their mutable set type and shared public-import identity in Domain. Twelve focused regression cases and all 176 backend tests passed without skips. **DET-001** remains implemented but not fully accepted; no next extraction has started.
 
 | ID | Description | Status | Commit reference |
 | --- | --- | --- | --- |
@@ -19,8 +19,8 @@ This file is the single lightweight task board; [Live Mode](live-mode.md) holds 
 | DEV-001 | Simple Windows script to start the local backend | Completed; Windows CMD runtime verified | `b02378f` |
 | LIVE-001 | Complete integrated Live Windows acceptance | Partially validated | `540c27d` (integration, not acceptance) |
 | ARCH-002 | Incremental backend Clean Architecture plan; planning only | Completed | — |
-| ARCH-003 | Extract ParsedEntry into Domain with compatible public imports | Completed; contracts, backend suite and Windows startup verified | — |
-| ARCH-004 | Architecture follow-up; scope requires owner definition/approval | Pending | — |
+| ARCH-003 | Extract ParsedEntry into Domain with compatible public imports | Completed; contracts, backend suite and Windows startup verified | `6b8cc0b` |
+| ARCH-004 | Separate stopword policy from persistence with compatible public imports | Completed; identity, import independence and lexical regressions verified | — |
 | AI-001 | Decide and implement an approved LLM fallback | Pending; not implemented | — |
 | DET-002 | Further contextual detection beyond DET-001; scope requires approval | Deferred | — |
 

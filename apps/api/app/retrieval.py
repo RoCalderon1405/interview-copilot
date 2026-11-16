@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from difflib import SequenceMatcher
 
-from .store import KnowledgeStore, STOPWORDS
+from .domain.text import STOPWORDS as STOPWORDS  # Preserve the public retrieval import.
+from .store import KnowledgeStore
 from .textnorm import normalize  # re-exported: retrieval.normalize stays importable
 
 
