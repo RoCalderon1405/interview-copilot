@@ -16,6 +16,14 @@ from app.domain.knowledge import ParsedEntry
 
 
 class Models:
+    async def open(self, language):
+        from app.infrastructure.vosk import VoskSession
+        return await VoskSession.open(self, language)
+
+    def availability(self):
+        return {"provider": "vosk", "available": True,
+                "languages": {language: {"available": True} for language in ("en-US", "es-MX")}}
+
     def __init__(self, *results):
         self.results = list(results)
 

@@ -61,6 +61,14 @@ class FakeRecognizer:
 
 
 class FakeModelCache:
+    async def open(self, language):
+        from app.infrastructure.vosk import VoskSession
+        return await VoskSession.open(self, language)
+
+    def availability(self):
+        return {"provider": "vosk", "available": True,
+                "languages": {language: {"available": True} for language in ("en-US", "es-MX")}}
+
     def __init__(self, feed_results=None, finish_result=None):
         self.feed_results = list(feed_results or [])
         self.finish_result = finish_result or FeedResult()
@@ -110,6 +118,8 @@ def test_local_diagnostics_first_pcm_once_and_no_private_payload(client, monkeyp
         assert ws.receive_json()["type"] == "ready"
         for _ in range(100):
             ws.send_bytes(b"\x00\x00" * 3200)
+            # Respect bounded reception rather than flooding 20 seconds of PCM.
+            time.sleep(0.01)
         ws.send_text("stop")
         with pytest.raises(WebSocketDisconnect):
             ws.receive_json()
@@ -446,7 +456,7 @@ def test_status_explains_missing_models_without_paths(tmp_path, monkeypatch):
     with pytest.raises(SpeechUnavailable):
         cache.create_recognizer("en-US")
 
-    monkeypatch.setattr("app.live._vosk_installed", lambda: False)
+    monkeypatch.setattr("app.infrastructure.vosk._vosk_installed", lambda: False)
     assert cache.availability()["runtime_installed"] is False
     assert cache.availability()["available"] is False
 
@@ -1046,6 +1056,8 @@ def test_real_vosk_pipeline_partial_final_source_and_no_audio_persistence(
             assert ready["language"] == language
             for offset in range(0, len(pcm), 4000):
                 websocket.send_bytes(pcm[offset:offset + 4000])
+                # The real capture sends paced audio, not the whole WAV at once.
+                time.sleep(len(pcm[offset:offset + 4000]) / 32000)
             # One second of silence flushes Vosk's endpointing, then stop flushes any remainder.
             websocket.send_bytes(b"\x00\x00" * 16000)
             websocket.send_text("stop")

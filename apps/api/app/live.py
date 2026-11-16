@@ -1,4 +1,4 @@
-"""Local Live audio pipeline: Vosk recognition, question detection and WebSocket routing.
+"""Local Live audio transport: authorized speech, question detection and retrieval.
 
 Privacy and lifecycle boundaries for this slice:
 
@@ -15,7 +15,6 @@ Privacy and lifecycle boundaries for this slice:
 from __future__ import annotations
 
 import asyncio
-import importlib.util
 import json
 import os
 import re
@@ -24,18 +23,23 @@ import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Callable, Literal
 
+import anyio
 from fastapi import APIRouter, HTTPException, Request, WebSocket
 from pydantic import BaseModel
 
+from .application.stt import (FeedResult, SpeechUnavailable, SpeechFailure, SpeechOverloaded,
+                              SpeechProvider, SpeechSession, TranscriptionControl, TranscriptionPump)
+from .infrastructure.vosk import VoskModelCache, MODEL_DIRECTORIES, default_models_root, _final_result
+from .bootstrap import create_whisper_provider
 from .retrieval import suggest_live
 from .live_generation import LiveGeneration
 from .store import KnowledgeStore
 from .textnorm import normalize
 
 Language = Literal["en-US", "es-MX"]
+Provider = Literal["vosk", "faster-whisper"]
 
 SAMPLE_RATE = 16000
 MAX_FRAME_BYTES = 64000
@@ -72,11 +76,6 @@ def _diagnostic(stage: str) -> None:
         print("[live-diag:api] " + json.dumps({"stage": stage}), flush=True)
     except Exception:
         pass
-
-MODEL_DIRECTORIES: dict[str, str] = {
-    "en-US": "vosk-model-small-en-us-0.15",
-    "es-MX": "vosk-model-small-es-0.42",
-}
 
 # Sentence boundaries for the heuristic detector. Unpunctuated finals remain
 # one chunk, which is why cue-prefix detection is also applied.
@@ -152,41 +151,12 @@ _SUBORDINATE_PROMPT = re.compile(
 )
 
 
-class SpeechUnavailable(Exception):
-    """Optional local speech runtime or model is not installed."""
-
-
-@dataclass(frozen=True)
-class FeedResult:
-    partial: str | None = None
-    final: str | None = None
-    last_word_end_seconds: float | None = None
-
-
 @dataclass(frozen=True)
 class LiveGrant:
     session_id: str
     language: str
     expires_at: float
-
-
-def default_models_root() -> Path:
-    """Return the trusted local model root.
-
-    Only an environment variable can relocate the root; request data never
-    influences this path. The default lives under the ignored local-data tree.
-    """
-    configured = os.environ.get("COPILOT_MODELS_DIR")
-    if configured:
-        return Path(configured).expanduser().resolve()
-    return Path(__file__).resolve().parents[3] / "local-data" / "models"
-
-
-def _vosk_installed() -> bool:
-    try:
-        return importlib.util.find_spec("vosk") is not None
-    except (ImportError, ValueError):
-        return False
+    provider: str = "vosk"
 
 
 def _detect_partial_questions(text: str, limit: int = MAX_QUESTION_CANDIDATES) -> list[str]:
@@ -391,7 +361,7 @@ class LiveTokenManager:
         self._tokens: dict[str, LiveGrant] = {}
         self._lock = threading.Lock()
 
-    def issue(self, session_id: str, language: str) -> str:
+    def issue(self, session_id: str, language: str, provider: str = "vosk") -> str:
         with self._lock:
             now = self.clock()
             self._prune(now)
@@ -400,7 +370,7 @@ class LiveTokenManager:
             if len(self._tokens) >= self.capacity:
                 self._tokens.pop(next(iter(self._tokens)))
             token = secrets.token_urlsafe(32)
-            self._tokens[token] = LiveGrant(session_id, language, now + self.ttl_seconds)
+            self._tokens[token] = LiveGrant(session_id, language, now + self.ttl_seconds, provider)
             return token
 
     def consume(self, token: str) -> LiveGrant | None:
@@ -415,104 +385,13 @@ class LiveTokenManager:
             del self._tokens[token]
 
 
-class VoskModelCache:
-    """Shared at-most-two-language Vosk model cache with serialized inference.
-
-    Model loading and recognizer calls run under one lock because the Vosk
-    model/recognizer objects are not safe for concurrent use. The process only
-    allows one Live recognizer connection at a time, but the lock also protects
-    model loading from concurrent status/connection paths.
-    """
-
-    def __init__(self, models_root: Path | None = None, max_models: int = 2):
-        self.models_root = Path(models_root) if models_root is not None else default_models_root()
-        self.max_models = max_models
-        self._models: OrderedDict[str, object] = OrderedDict()
-        self._lock = threading.Lock()
-
-    def model_dir(self, language: str) -> Path:
-        return self.models_root / MODEL_DIRECTORIES[language]
-
-    def is_model_available(self, language: str) -> bool:
-        directory = self.model_dir(language)
-        return (
-            (directory / "am" / "final.mdl").is_file()
-            and (directory / "conf" / "model.conf").is_file()
-        )
-
-    def availability(self) -> dict:
-        installed = _vosk_installed()
-        languages = {
-            language: {"available": bool(installed and self.is_model_available(language))}
-            for language in MODEL_DIRECTORIES
-        }
-        available = [language for language, entry in languages.items() if entry["available"]]
-        if not installed:
-            detail = "Optional local Vosk runtime is not installed; speech-to-text is unavailable."
-        elif not available:
-            detail = "Local Vosk model files are not available; speech-to-text is unavailable."
-        elif len(available) == len(languages):
-            detail = "Local Vosk speech-to-text is available for English and Spanish."
-        else:
-            detail = f"Local Vosk speech-to-text is available only for {available[0]}."
-        return {
-            "provider": "vosk",
-            "available": bool(available),
-            "runtime_installed": installed,
-            "languages": languages,
-            "detail": detail,
-        }
-
-    def create_recognizer(self, language: str):
-        with self._lock:
-            if not _vosk_installed() or not self.is_model_available(language):
-                raise SpeechUnavailable("Local speech model is unavailable")
-            import vosk
-
-            # Library model-load diagnostics are not user transcripts, but
-            # silence them so normal app output stays clean.
-            vosk.SetLogLevel(-1)
-            model = self._models.get(language)
-            if model is None:
-                if len(self._models) >= self.max_models:
-                    self._models.popitem(last=False)
-                model = vosk.Model(str(self.model_dir(language)))
-                self._models[language] = model
-            else:
-                self._models.move_to_end(language)
-            recognizer = vosk.KaldiRecognizer(model, SAMPLE_RATE)
-            recognizer.SetWords(True)
-            return recognizer
-
-    def feed(self, recognizer, audio: bytes) -> FeedResult:
-        with self._lock:
-            if recognizer.AcceptWaveform(audio):
-                return _final_result(recognizer.Result())
-            payload = json.loads(recognizer.PartialResult())
-            partial = (payload.get("partial") or "").strip()
-            return FeedResult(partial=partial or None)
-
-    def finish(self, recognizer) -> FeedResult:
-        with self._lock:
-            return _final_result(recognizer.FinalResult())
-
-
-def _final_result(payload_text: str) -> FeedResult:
-    payload = json.loads(payload_text)
-    text = (payload.get("text") or "").strip()
-    end = None
-    # Vosk emits recognized word timing under "result" when SetWords(True).
-    words = payload.get("result") or payload.get("words") or []
-    if words and isinstance(words[-1], dict) and isinstance(words[-1].get("end"), (int, float)):
-        end = float(words[-1]["end"])
-    return FeedResult(final=text or None, last_word_end_seconds=end)
-
-
 class LiveRuntime:
     """Process-wide Live resources: token store and the single connection slot."""
 
-    def __init__(self, models: VoskModelCache | None = None, clock: Callable[[], float] = time.monotonic):
+    def __init__(self, models: VoskModelCache | None = None, clock: Callable[[], float] = time.monotonic,
+                 whisper: SpeechProvider | None = None):
         self.models = models or VoskModelCache()
+        self.whisper = whisper or create_whisper_provider()
         self.clock = clock
         self.tokens = LiveTokenManager(clock=clock)
         self.idle_timeout_seconds = IDLE_TIMEOUT_SECONDS
@@ -522,6 +401,7 @@ class LiveRuntime:
         self._connection_lock = threading.Lock()
         self._connection_active = False
         self.generations: dict[str, LiveGeneration] = {}
+        self.transcriptions: dict[str, TranscriptionControl] = {}
 
     def acquire_connection(self) -> bool:
         with self._connection_lock:
@@ -554,10 +434,27 @@ async def _send_live(websocket: WebSocket, event: dict) -> None:
         await websocket.send_json(event)
 
 
-async def _fail(websocket: WebSocket, code: str, message: str, close_code: int = 1008) -> None:
+async def _close_live_work(websocket: WebSocket) -> None:
+    """Invalidate both result streams before concurrently draining their resources."""
+    pump = getattr(websocket.state, "transcription_pump", None)
     generation = getattr(websocket.state, "generation", None)
+    tasks = []
+    if pump is not None:
+        pump.closed = True
+        pump.task.cancel()
+        tasks.append(pump.close())
+    else:
+        speech = getattr(websocket.state, "speech_session", None)
+        if speech is not None:
+            tasks.append(speech.close())
     if generation is not None:
-        await generation.close()
+        generation.supersede()
+        tasks.append(generation.close())
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def _fail(websocket: WebSocket, code: str, message: str, close_code: int = 1008) -> None:
+    await _close_live_work(websocket)
     try:
         await _send_live(websocket, {"type": "error", "code": code, "message": message})
     finally:
@@ -602,6 +499,8 @@ async def _emit_final(
         "text": text,
         "language": language,
         "last_word_end_seconds": result.last_word_end_seconds,
+        **({"end_of_speech_latency_ms": result.end_of_speech_latency_ms}
+           if result.end_of_speech_latency_ms is not None else {}),
     })
     for question in detect_questions(text):
         if dedupe.seen(question):
@@ -662,6 +561,43 @@ async def _emit_stable_partial_exact(
     })
 
 
+async def _open_speech(websocket: WebSocket, runtime: LiveRuntime, grant: LiveGrant,
+                       control: TranscriptionControl) -> SpeechSession | None:
+    """Watch stop/disconnect during native startup, not just after model loading."""
+    opening = asyncio.create_task(runtime.whisper.open(grant.language) if grant.provider == "faster-whisper"
+                                  else runtime.models.open(grant.language))
+    incoming = asyncio.create_task(websocket.receive())
+    stopping = asyncio.create_task(control.stop.wait())
+    claimed = False
+    try:
+        done, _ = await asyncio.wait({opening, incoming, stopping}, return_when=asyncio.FIRST_COMPLETED)
+        if stopping in done:
+            await _fail(websocket, "session_finished", "The Live session is already finished")
+            return None
+        if incoming in done:
+            message = incoming.result()
+            if message.get("type") != "websocket.disconnect":
+                text = message.get("text") or ""
+                if len(text) > MAX_CONTROL_CHARS:
+                    await _fail(websocket, "control_too_large", f"Text control is limited to {MAX_CONTROL_CHARS} characters", 1009)
+                elif _is_stop_control(text):
+                    await websocket.close(code=1000)
+                else:
+                    await _fail(websocket, "not_ready", "Wait for ready before sending PCM")
+            return None
+        result = await opening
+        claimed = True
+        return result
+    finally:
+        with anyio.CancelScope(shield=True):
+            for task in (incoming, stopping, opening):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(incoming, stopping, opening, return_exceptions=True)
+            if not claimed and opening.done() and not opening.cancelled() and opening.exception() is None:
+                await opening.result().close()
+
+
 async def _run_transcription(websocket: WebSocket, runtime: LiveRuntime, store: KnowledgeStore) -> None:
     loop = asyncio.get_running_loop()
     try:
@@ -698,6 +634,16 @@ async def _run_transcription(websocket: WebSocket, runtime: LiveRuntime, store: 
     if "language" in payload and payload["language"] != grant.language:
         await _fail(websocket, "language_mismatch", "The token is bound to a different language")
         return
+    if grant.provider not in {"vosk", "faster-whisper"}:
+        await _fail(websocket, "unsupported_provider", "Unsupported local speech provider")
+        return
+    if "provider" in payload and payload["provider"] != grant.provider:
+        await _fail(websocket, "provider_mismatch", "The token is bound to a different provider")
+        return
+    control = TranscriptionControl()
+    websocket.state.transcription_control = control
+    websocket.state.session_id = grant.session_id
+    runtime.transcriptions[grant.session_id] = control
     session = await asyncio.to_thread(store.get_session, grant.session_id)
     if not session or session["mode"] != "live":
         await _fail(websocket, "not_live", "The token is not bound to a Live session")
@@ -707,9 +653,12 @@ async def _run_transcription(websocket: WebSocket, runtime: LiveRuntime, store: 
         return
     try:
         _diagnostic("recognizer.begin")
-        recognizer = await asyncio.to_thread(runtime.models.create_recognizer, grant.language)
+        speech = await _open_speech(websocket, runtime, grant, control)
+        if speech is None:
+            return
+        websocket.state.speech_session = speech
     except SpeechUnavailable:
-        await _fail(websocket, "speech_unavailable", "Local speech recognition is unavailable", 1013)
+        await _fail(websocket, "speech_unavailable", "Selected local speech provider/runtime/model is unavailable", 1013)
         return
     except Exception:
         await _fail(websocket, "speech_error", "Local speech recognition could not start", 1011)
@@ -723,10 +672,25 @@ async def _run_transcription(websocket: WebSocket, runtime: LiveRuntime, store: 
                                 language, websocket.send_json, websocket.state.send_lock)
     websocket.state.generation = generation
     runtime.generations[grant.session_id] = generation
+
+    async def emit(result: FeedResult, stopping: bool) -> None:
+        if _transcript_too_large(result.partial) or _transcript_too_large(result.final):
+            raise SpeechFailure("transcript_too_large")
+        if result.partial:
+            await _send_live(websocket, {"type": "partial", "text": result.partial, "language": language})
+            await _emit_stable_partial_exact(websocket, store, result.partial, language, stable_partial, dedupe)
+        if result.final:
+            stable_partial.reset()
+            await _emit_final(websocket, runtime, store, result, language, dedupe,
+                              generation if not stopping and result.utterance_complete else None)
+
+    pump = TranscriptionPump(speech, segmented=grant.provider == "faster-whisper", emit=emit)
+    websocket.state.transcription_pump = pump
     await _send_live(websocket, {
         "type": "ready",
         "session_id": grant.session_id,
         "language": language,
+        "provider": grant.provider,
         "sample_rate": SAMPLE_RATE,
         "sample_format": "pcm_s16le",
         "channels": 1,
@@ -735,85 +699,75 @@ async def _run_transcription(websocket: WebSocket, runtime: LiveRuntime, store: 
 
     deadline = loop.time() + runtime.session_limit_seconds
     received_pcm = False
-    while True:
-        remaining = deadline - loop.time()
-        if remaining <= 0:
-            await _fail(websocket, "session_limit", "The Live session time limit was reached", 4408)
-            return
-        try:
-            message = await asyncio.wait_for(
-                websocket.receive(), timeout=min(runtime.idle_timeout_seconds, remaining)
-            )
-        except asyncio.TimeoutError:
-            if loop.time() >= deadline:
+    incoming = asyncio.create_task(websocket.receive())
+    stopping = asyncio.create_task(control.stop.wait())
+    try:
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
                 await _fail(websocket, "session_limit", "The Live session time limit was reached", 4408)
-            else:
-                await _fail(websocket, "idle_timeout", "No audio was received before the idle timeout", 4408)
-            return
-        if message.get("type") == "websocket.disconnect":
-            return
-        audio = message.get("bytes")
-        if audio is not None:
-            if not audio:
+                return
+            done, _ = await asyncio.wait({incoming, stopping, pump.task},
+                                         timeout=max(0, min(runtime.idle_timeout_seconds, remaining)),
+                                         return_when=asyncio.FIRST_COMPLETED)
+            if stopping in done:
+                await _fail(websocket, "session_finished", "The Live session is already finished")
+                return
+            if pump.task in done:
+                await pump.task
+                return
+            if not done:
+                if loop.time() >= deadline:
+                    await _fail(websocket, "session_limit", "The Live session time limit was reached", 4408)
+                else:
+                    await _fail(websocket, "idle_timeout", "No audio was received before the idle timeout", 4408)
+                return
+            message = incoming.result()
+            if message.get("type") == "websocket.disconnect":
+                return
+            audio = message.get("bytes")
+            if audio is not None:
+                if len(audio) > runtime.max_frame_bytes or len(audio) % 2:
+                    await _fail(websocket, "invalid_audio", "Expected PCM16 mono frames up to 64000 bytes")
+                    return
+                if audio:
+                    if not received_pcm:
+                        received_pcm = True
+                        _diagnostic("pcm.first-receipt")
+                    pump.feed(audio)
+                incoming = asyncio.create_task(websocket.receive())
                 continue
-            if len(audio) > runtime.max_frame_bytes or len(audio) % 2:
-                await _fail(websocket, "invalid_audio", "Expected PCM16 mono frames up to 64000 bytes")
+            text = message.get("text")
+            if text is not None:
+                if len(text) > MAX_CONTROL_CHARS:
+                    await _fail(websocket, "control_too_large", f"Text control is limited to {MAX_CONTROL_CHARS} characters", 1009)
+                    return
+                if not _is_stop_control(text):
+                    await _fail(websocket, "unsupported_control", "Only stop is accepted as text")
+                    return
+                pump.stopping = True
+                if grant.provider == "faster-whisper":
+                    await _close_live_work(websocket)
+                else:
+                    await generation.close()
+                    await pump.finish()
+                await websocket.close(code=1000)
                 return
-            if not received_pcm:
-                received_pcm = True
-                _diagnostic("pcm.first-receipt")
-            try:
-                result = await asyncio.to_thread(runtime.models.feed, recognizer, audio)
-            except Exception:
-                await _fail(websocket, "speech_error", "Local speech recognition failed", 1011)
-                return
-            if _transcript_too_large(result.partial) or _transcript_too_large(result.final):
-                await _fail(
-                    websocket,
-                    "transcript_too_large",
-                    f"The transcript exceeded the {MAX_TRANSCRIPT_CHARS} character limit",
-                    1009,
-                )
-                return
-            if result.partial:
-                await _send_live(websocket, {"type": "partial", "text": result.partial, "language": language})
-                await _emit_stable_partial_exact(
-                    websocket, store, result.partial, language, stable_partial, dedupe
-                )
-            if result.final:
-                stable_partial.reset()
-                await _emit_final(websocket, runtime, store, result, language, dedupe, generation)
-            continue
-        text = message.get("text")
-        if text is not None:
-            if len(text) > MAX_CONTROL_CHARS:
-                await _fail(
-                    websocket,
-                    "control_too_large",
-                    f"Text control is limited to {MAX_CONTROL_CHARS} characters",
-                    1009,
-                )
-                return
-            if not _is_stop_control(text):
-                await _fail(websocket, "unsupported_control", "Only stop is accepted as text")
-                return
-            await generation.close()
-            try:
-                result = await asyncio.to_thread(runtime.models.finish, recognizer)
-            except Exception:
-                await _fail(websocket, "speech_error", "Local speech recognition failed", 1011)
-                return
-            if _transcript_too_large(result.partial) or _transcript_too_large(result.final):
-                await _fail(
-                    websocket,
-                    "transcript_too_large",
-                    f"The transcript exceeded the {MAX_TRANSCRIPT_CHARS} character limit",
-                    1009,
-                )
-                return
-            await _emit_final(websocket, runtime, store, result, language, dedupe)
-            await websocket.close(code=1000)
-            return
+            incoming = asyncio.create_task(websocket.receive())
+    except SpeechOverloaded:
+        detail = "Try Vosk." if grant.provider == "faster-whisper" else "Check CPU load before restarting Vosk."
+        await _fail(websocket, "speech_overloaded", f"Speech inference cannot keep up; capture stopped. {detail}", 1013)
+    except SpeechFailure as exc:
+        if exc.args == ("transcript_too_large",):
+            await _fail(websocket, "transcript_too_large", f"The transcript exceeded the {MAX_TRANSCRIPT_CHARS} character limit", 1009)
+        else:
+            await _fail(websocket, "speech_error", "Local speech recognition failed or exceeded its deadline", 1011)
+    except Exception:
+        await _fail(websocket, "speech_error", "Local speech recognition failed", 1011)
+    finally:
+        incoming.cancel()
+        stopping.cancel()
+        await asyncio.gather(incoming, stopping, return_exceptions=True)
 
 
 router = APIRouter()
@@ -821,13 +775,17 @@ router = APIRouter()
 
 class LiveTokenRequest(BaseModel):
     language: Language
+    provider: Provider = "vosk"
     # Consent is an explicit opt-in; a missing or false value is rejected by validation.
     consent: Literal[True]
 
 
 @router.get("/live/status")
 def live_status(request: Request):
-    return request.app.state.live.models.availability()
+    runtime: LiveRuntime = request.app.state.live
+    vosk = runtime.models.availability()
+    return {**vosk, "default_provider": "vosk",
+            "providers": {"vosk": vosk, "faster-whisper": runtime.whisper.availability()}}
 
 
 @router.post("/sessions/{session_id}/live-token")
@@ -840,11 +798,18 @@ def create_live_token(session_id: str, request: LiveTokenRequest, http_request: 
         raise HTTPException(status_code=400, detail="Not a live session")
     if session["finished_at"]:
         raise HTTPException(status_code=409, detail="Session already finished")
-    token = http_request.app.state.live.tokens.issue(session_id, request.language)
+    runtime: LiveRuntime = http_request.app.state.live
+    provider = runtime.models if request.provider == "vosk" else runtime.whisper
+    status = provider.availability()
+    if not status.get("languages", {}).get(request.language, {}).get("available"):
+        raise HTTPException(status_code=503, detail=f"Selected provider ({request.provider}) is unavailable for {request.language}. "
+                            "Check local runtime/model configuration; no automatic fallback.")
+    token = runtime.tokens.issue(session_id, request.language, request.provider)
     return {
         "token": token,
         "session_id": session_id,
         "language": request.language,
+        "provider": request.provider,
         "expires_in_seconds": int(TOKEN_TTL_SECONDS),
     }
 
@@ -867,6 +832,9 @@ async def live_transcribe(websocket: WebSocket):
         _diagnostic("ws.accepted")
         try:
             await _run_transcription(websocket, runtime, store)
+        except asyncio.CancelledError:
+            # ASGI disconnect/shutdown still runs shielded native teardown below.
+            pass
         except Exception:
             # Keep the boundary free of transcript/path detail and never leak a traceback to the client.
             try:
@@ -882,11 +850,17 @@ async def live_transcribe(websocket: WebSocket):
             except Exception:
                 pass
     finally:
-        generation = getattr(websocket.state, "generation", None)
-        if generation is not None:
-            await generation.close()
-            runtime.generations.pop(generation.session_id, None)
-        # The per-connection recognizer is local to _run_transcription; this
-        # finally guarantees only the shared slot is released on every path.
-        runtime.release_connection()
-        _diagnostic("cleanup.complete")
+        # ASGI/AnyIO cancellation must not interrupt reaping a native worker.
+        with anyio.CancelScope(shield=True):
+            try:
+                generation = getattr(websocket.state, "generation", None)
+                if generation is not None:
+                    runtime.generations.pop(generation.session_id, None)
+                await _close_live_work(websocket)
+            finally:
+                control = getattr(websocket.state, "transcription_control", None)
+                if control is not None:
+                    runtime.transcriptions.pop(websocket.state.session_id, None)
+                    control.closed.set()
+                runtime.release_connection()
+                _diagnostic("cleanup.complete")

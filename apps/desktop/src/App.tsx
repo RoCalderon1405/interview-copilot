@@ -240,7 +240,7 @@ function Live({showError}: {showError:(e:unknown)=>void}) {
       <p className="page-description">Captura audio con consentimiento y prioriza documentos locales. Si Ollama está habilitado, puede sugerir respuestas de IA sin respaldo documental.</p>
     </div><span className="page-icon"><Headphones size={22}/></span></div>
     <div className="panel live-control-panel">
-      <div className="panel-title"><h2>Audio del sistema</h2><span className="hint">Electron → Vosk → Q&A</span></div>
+      <div className="panel-title"><h2>Audio del sistema</h2><span className="hint">Electron → STT local → Q&A</span></div>
       <p className="small-muted">La captura escucha toda la salida de audio de Windows. Se abrirá una ventana aislada para seleccionar idioma, autorizar e iniciar. Ninguna grabación se guarda.</p>
       <div className="live-actions">
         <button className="btn primary" disabled={captureBusy || !window.copilotDesktop} onClick={()=>void openCapture()}>
@@ -255,7 +255,7 @@ function Live({showError}: {showError:(e:unknown)=>void}) {
       <section className="panel live-suggestions"><div className="panel-title"><h2>Preguntas y respuestas</h2><span className="hint">Documentos o sugerencias de IA identificadas</span></div>
         {suggestions.length ? suggestions.map((item,index) => <LiveSuggestion item={item} key={`${item.type}-${item.question_id ?? item.question}-${index}`}/>) : <p className="small-muted">Las preguntas detectadas aparecerán aquí cuando se reciba audio.</p>}
       </section>
-      <section className="panel live-transcript"><div className="panel-title"><h2>Transcripción</h2><span className="hint">Vosk · tiempo real</span></div>
+      <section className="panel live-transcript"><div className="panel-title"><h2>Transcripción</h2><span className="hint">STT local · Live</span></div>
         {partial && <p className="live-partial">{partial}</p>}
         {transcript.length ? transcript.map((item,index) => <p className="live-transcript-line" key={index}>{item.text}</p>) : <p className="small-muted">Esperando voz…</p>}
       </section>

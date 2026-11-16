@@ -1,4 +1,4 @@
-"""Explicit optional generation composition; not wired to HTTP or Live yet."""
+"""Optional local generation and speech composition, without startup downloads."""
 from __future__ import annotations
 
 import math
@@ -7,6 +7,13 @@ from collections.abc import Mapping
 
 from .application.generation import DEFAULT_TIMEOUT_SECONDS, GenerationError, GenerationService
 from .infrastructure.ollama import OllamaProvider
+from .application.stt import SpeechProvider
+from .infrastructure.faster_whisper import FasterWhisperProvider
+
+
+def create_whisper_provider() -> SpeechProvider:
+    """Compose optional local speech without loading, installing or downloading it."""
+    return FasterWhisperProvider()
 
 
 def create_generation_service(environ: Mapping[str, str] | None = None) -> GenerationService:

@@ -15,11 +15,11 @@ Second Electron window (separate, nonpersistent session)
     ├── direct user click + explicit consent
     ├── reused standalone getDisplayMedia loopback path
     ├── AudioWorklet → mono PCM16 @16kHz
-    ├── single-use-token local WebSocket → FastAPI/Vosk
+    ├── provider/language-bound single-use-token local WebSocket → FastAPI/STT
     └── validated text/status/suggestion IPC → main window
 
 FastAPI localhost:8765
-    ├── local Vosk EN/ES STT via /live/transcribe
+    ├── local Vosk (default) / CPU Faster-Whisper EN/ES via /live/transcribe
     ├── heuristic conversational question extraction
     ├── exact Q&A → optional semantic FastEmbed candidates in SQLite
     ├── answer + provenance, or explicit no-evidence
@@ -29,13 +29,15 @@ FastAPI localhost:8765
 ### Module responsibilities today
 
 - `apps/api/app/main.py`: application composition (including one optional generation service), HTTP schemas/routes, upload handling and origin/host restrictions. Session finish suppresses/drains that session's generation before returning its existing report.
-- `live.py`: token lifecycle, single active transcription slot, Vosk cache, heuristic EN/ES detector, deduplication, WebSocket protocol and retrieval coordination. Stable repeated partials permit early exact lookup; finals permit exact/semantic lookup.
+- `live.py`: token lifecycle, single active transcription slot, heuristic EN/ES detector, deduplication, WebSocket protocol and retrieval coordination. Grants bind provider and language; stable Vosk partials permit early exact lookup, finals permit exact/semantic lookup. Legacy speech symbols are re-exported for compatibility.
+- `application/stt.py`: framework-independent speech result/session/provider contracts, bounded energy segmentation and connection-scoped receive/inference pump. No RAG, LLM or native imports; transport supplies the existing retrieval/event callback. Separate reception and processing bound slow downstream work too.
+- `infrastructure/vosk.py`: the existing lazy, locked Vosk cache and unchanged partial/final/word-timing parsing, plus an async session that drains native thread calls on cancellation. `infrastructure/faster_whisper.py` / `whisper_worker.py`: CPU INT8 local-only subprocess adapter/protocol; one language-bound worker per connection, bounded messages/deadlines, explicit terminate/drain/reap on stop/disconnect.
 - `domain/knowledge.py`: framework-independent frozen `ParsedEntry` dataclass, shared by parsing and persistence (ARCH-003).
 - `domain/text.py`: the existing mutable `STOPWORDS` set, shared directly by persistence and retrieval (ARCH-004). Both legacy module imports reference this same object; its content is unchanged. `textnorm.py` remains unchanged and pure.
 - `application/ports.py`: `RetrievalReader`, a structural Protocol exposing only `find_exact_qa` and `find_matches` (ARCH-005). It preserves existing dictionary rows and requires no framework or concrete storage implementation.
 - `application/generation.py`: independent `GenerationService`, typed `GenerationProvider` port, fixed EN/ES instructions, bounded deadline/input/output and immutable AI-generated provenance with no documentary source (AI-001A). No HTTP/framework dependency or retrieval change.
 - `infrastructure/ollama.py`: local-only non-streaming chat HTTP adapter using runtime `httpx`; no proxies, redirects, retries, credentials, tools or model pulls. Validates bounded completed assistant output; provider payloads are not exposed as error messages.
-- `bootstrap.py`: opt-in generation factory, called once by `main.py` without network I/O. Invalid optional configuration degrades to a disabled service. Configuration and limits are documented in [README](../README.md#optional-automatic-local-generation-ai-001a--ai-001b).
+- `bootstrap.py`: optional generation and Whisper provider composition, called by `main.py` without model loading/network I/O. Invalid optional generation configuration degrades to a disabled service. Configuration and limits are documented in [README](../README.md).
 - `live_generation.py`: connection-scoped generation coordinator, outside the PCM/Vosk loop (AI-001B). One active call and one replaceable latest pending question; revisions plus session/connection/question IDs suppress stale results. Replacement, stop, disconnect, error and HTTP session finish invalidate/cancel work. All WS event sends share a lock; generation failures preserve no-evidence and do not terminate capture. Request cancellation cannot guarantee instant termination of Ollama's internal inference.
 - `parsers.py`: format-specific extraction into Q&A or text fragments, with source locations and resource limits. Re-exports the same Domain `ParsedEntry` class for compatibility.
 - `store.py`: local document files, SQLite schema, entries, FTS5, vectors and Live/Practice session persistence. Imports `ParsedEntry` directly from Domain, not from the document parsers.
@@ -48,6 +50,10 @@ FastAPI localhost:8765
 ARCH-003 extracts only the shared record, preserving its five fields, constructor, equality and immutability. Domain uses only the standard library; persistence no longer loads PDF/Office libraries through its entry type. Parsing algorithms, storage, retrieval and Live behavior are unchanged. This is the first small extraction, not a fully layered Clean Architecture backend or a feature-separated desktop.
 
 ARCH-004 moved stopwords out of persistence without changing filtering behavior. ARCH-005 replaces retrieval's concrete storage type dependency with the application read port; `KnowledgeStore` implements it structurally without inheritance, wrappers or SQL changes. Existing functions, dictionaries, exact/lexical/semantic priorities, scores, thresholds and Practice feedback remain unchanged. Other modules still use concrete adapters; application/infrastructure separation is not complete.
+
+STT-001A introduces only speech contracts and a bounded pump, not a general streaming framework. The Vosk adapter is moved (public `app.live` imports retained), not redesigned; recognition calls/timings and retrieval policies are preserved. New CPU work stays behind the application-owned speech port. `LiveRuntime` retains legacy Vosk composition defaults for compatibility; main/bootstrap explicitly compose the new optional adapter. Transport owns authentication and event translation, not segmentation/native inference.
+
+Whisper deliberately uses a subprocess rather than a cancelled `to_thread` future: native CTranslate2 inference cannot reliably be interrupted by cancelling its Python awaiter, and the approved Whisper runtime is isolated from the working API `.venv`. A subprocess makes normal teardown terminable/reapable, at the cost of a model reload on each session and Windows subprocess-capable loop requirements. No persistent worker pool or new service is introduced. Vosk's existing short native calls are drained rather than abandoned. Receive/worker limits are documented in [setup](../README.md#optional-faster-whisper-live-setup-stt-001a); backpressure fails closed without silent audio loss or provider changes. The energy gate is a minimal dependency-free endpointing choice, not robust VAD or a claim of real conversational accuracy. Forced cuts remain transcript/documentary-only, without Ollama generation or misleading EOS measurements. The ≤3 s p95 criterion needs actual Windows/human acceptance, not just paced synthetic replay.
 
 ### Documents, retrieval and consistency
 
@@ -63,7 +69,7 @@ See [README document limitations](../README.md#documents-and-retrieval) for extr
 
 Main Electron session explicitly denies display/microphone capture. The separate nonpersistent `live-capture` partition permits a display request only from its trusted main frame with a user gesture. Consent is checked in the capture UI and required for the backend token request. Capture includes **all Windows output**, not one app. Video is required by the loopback request but is not displayed or recorded.
 
-The capture page uses Vite `http://127.0.0.1:5173`; PCM16 mono at 16 kHz goes directly to `ws://127.0.0.1:8765/live/transcribe`. Tokens are ephemeral, single-use and sent in the start message. WS validates Origin/Host independently of HTTP CORS. HTTP allows development origins and requests without Origin; these controls do not authenticate other local processes. Packaged capture is disabled pending separate bootstrap/authentication/origin validation; do not allow `file://`/`null` origins as a shortcut.
+The capture page uses Vite `http://127.0.0.1:5173`; PCM16 mono at 16 kHz goes directly to `ws://127.0.0.1:8765/live/transcribe`. Tokens are ephemeral, single-use, provider/language/session-bound and sent in the start message. Selection is immutable within a connection, not a client-side instruction to change the active recognizer. WS validates Origin/Host independently of HTTP CORS. HTTP allows development origins and requests without Origin; these controls do not authenticate other local processes. Packaged capture is disabled pending separate bootstrap/authentication/origin validation; do not allow `file://`/`null` origins as a shortcut.
 
 IPC checks the window/frame/URL and allowlists bounded text/status/suggestion/metric fields; raw audio and credentials are not relayed. Live transcripts and audio are not persisted. Main-process history is capped at 80 events, and React also bounds its history; the auxiliary lab DOM currently accumulates results until reset. SQLite persists documents, vectors and session metadata; basic Practice also persists submitted answers.
 

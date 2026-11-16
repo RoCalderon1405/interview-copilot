@@ -1,4 +1,4 @@
-/** Independent, consent-driven Windows → PCM16 → local Vosk transcription test. */
+/** Consent-driven Windows → PCM16 → authorized local STT session. */
 'use strict';
 const API = 'http://127.0.0.1:8765';
 const SOCKET = 'ws://127.0.0.1:8765/live/transcribe';
@@ -6,6 +6,9 @@ const consent = document.getElementById('consent');
 const start = document.getElementById('start');
 const stop = document.getElementById('stop');
 const language = document.getElementById('language');
+const provider = document.getElementById('provider');
+const speechStatus = document.getElementById('speech-status');
+const speechLatency = document.getElementById('speech-latency');
 const status = document.getElementById('status');
 const level = document.getElementById('level');
 const info = document.getElementById('info');
@@ -18,6 +21,8 @@ let stream = null, context = null, source = null, analyser = null;
 let silentOutput = null, worklet = null, socket = null, frame = null;
 let busy = false, stopping = false, pcmFrames = 0, stopTimeout = null;
 let lastPublishedMetric = 0;
+let captureRevision = 0;
+function engineLabel() { return provider.value === 'faster-whisper' ? 'Faster-Whisper' : 'Vosk'; }
 function publish(packet) {
   // No bridge in the standalone lab: the original validated path stays independent.
   window.copilotCapture?.publish(packet);
@@ -42,12 +47,33 @@ async function updateSemanticStatus() {
 }
 void updateSemanticStatus();
 
+async function updateSpeechStatus() {
+  try {
+    const response = await fetch(`${API}/live/status`, { cache: 'no-store' });
+    if (!response.ok) throw new Error('unavailable');
+    const data = await response.json();
+    const selected = data.providers?.[provider.value] ?? (provider.value === 'vosk' ? data : null);
+    speechStatus.textContent = selected?.languages?.[language.value]?.available
+      ? `${engineLabel()} disponible. ${provider.value === 'faster-whisper' ? 'Solo resultados finales; detener cancela segmentos pendientes.' : 'Transcripción parcial y final.'}`
+      : `${engineLabel()} no disponible para este idioma. Revisa la configuración local; no se descargan modelos ni se cambia de motor automáticamente.`;
+  } catch {
+    speechStatus.textContent = 'No se pudo consultar el motor local. Verifica el backend antes de iniciar.';
+  }
+}
+provider.addEventListener('change', () => { void updateSpeechStatus(); });
+language.addEventListener('change', () => { void updateSpeechStatus(); });
+void updateSpeechStatus();
+
 async function postJson(path, body) {
   const response = await fetch(`${API}${path}`, {
     method: 'POST', mode: 'cors', cache: 'no-store',
     headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });
-  if (!response.ok) throw new Error(`API ${path}: HTTP ${response.status}`);
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    const detail = typeof payload?.detail === 'string' ? ` — ${payload.detail.slice(0, 500)}` : '';
+    throw new Error(`API: HTTP ${response.status}${detail}`);
+  }
   return response.json();
 }
 
@@ -68,6 +94,7 @@ function measure() {
 }
 
 async function cleanup() {
+  const revision = ++captureRevision;
   if (stopTimeout !== null) clearTimeout(stopTimeout);
   stopTimeout = null;
   if (frame !== null) cancelAnimationFrame(frame);
@@ -80,30 +107,34 @@ async function cleanup() {
     try { node?.disconnect(); } catch { /* already disconnected */ }
   }
   source = analyser = worklet = silentOutput = null;
-  if (context) { try { await context.close(); } catch { /* already closed */ } }
+  const closingContext = context;
   context = null;
   busy = false;
   stopping = false;
   stop.disabled = true;
   language.disabled = false;
+  provider.disabled = false;
   start.disabled = !consent.checked;
   level.style.width = '0%';
+  if (closingContext) { try { await closingContext.close(); } catch { /* already closed */ } }
+  return revision;
 }
 
 async function fail(error) {
   const message = error instanceof Error ? error.message : String(error);
-  await cleanup();
+  const revision = await cleanup();
+  if (revision !== captureRevision) return;
   setStatus(`FALLO: ${message}`);
   publish({type:'error',text:message});
 }
 
-async function beginPcm() {
-  if (!busy || stopping || !context || !source || !socket) return;
+async function beginPcm(revision) {
+  if (revision !== captureRevision || !busy || stopping || !context || !source || !socket) return;
   await context.audioWorklet.addModule('/audio-lab/pcm-processor.js');
-  if (!busy || stopping || !context || !source || !socket) return;
+  if (revision !== captureRevision || !busy || stopping || !context || !source || !socket) return;
   worklet = new AudioWorkletNode(context, 'copilot-pcm16', { outputChannelCount: [1] });
   worklet.port.onmessage = event => {
-    if (socket?.readyState !== WebSocket.OPEN || stopping) return;
+    if (revision !== captureRevision || socket?.readyState !== WebSocket.OPEN || stopping) return;
     if (socket.bufferedAmount > 262144) {
       void fail(new Error('El backend no consume audio con suficiente velocidad'));
       return;
@@ -113,29 +144,39 @@ async function beginPcm() {
   };
   source.connect(worklet);
   worklet.connect(silentOutput); // Gain 0: never play loopback again.
-  setStatus('Vosk listo. Reproduce una frase en Windows.');
+  setStatus(`${engineLabel()} listo. Reproduce una frase en Windows.`);
 }
 
 start.addEventListener('click', async () => {
   if (!consent.checked || busy) return;
+  const revision = ++captureRevision;
   busy = true;
   start.disabled = true;
   language.disabled = true;
+  provider.disabled = true;
+  const selectedProvider = provider.value;
+  const selectedLanguage = language.value;
   stop.disabled = false;
   partial.textContent = 'Esperando voz…';
   finals.replaceChildren();
   questions.replaceChildren();
   questionHint.textContent = 'Esperando una pregunta completa…';
   pcmFrames = 0;
+  speechLatency.textContent = 'Latencia EOS estimada: pendiente (Faster-Whisper).';
   void updateSemanticStatus();
   setStatus('Solicitando audio del sistema…');
   try {
     // Critical: the validated capture call stays directly inside a real user click.
-    stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    const captured = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    if (revision !== captureRevision || !busy || stopping) {
+      captured.getTracks().forEach(track => track.stop());
+      return;
+    }
+    stream = captured;
     const tracks = stream.getAudioTracks();
     if (!tracks.length) throw new Error('Windows no devolvió ninguna pista de audio');
     stream.getTracks().forEach(track => track.addEventListener('ended', () => {
-      if (!stopping) void fail(new Error('Una pista del sistema terminó'));
+      if (revision === captureRevision && !stopping) void fail(new Error('Una pista del sistema terminó'));
     }, { once: true }));
     context = new AudioContext();
     source = context.createMediaStreamSource(new MediaStream(tracks));
@@ -143,38 +184,52 @@ start.addEventListener('click', async () => {
     silentOutput = context.createGain(); silentOutput.gain.value = 0;
     source.connect(analyser); analyser.connect(silentOutput); silentOutput.connect(context.destination);
     await context.resume();
+    if (revision !== captureRevision || !busy || stopping) return;
     measure();
 
-    setStatus('Comprobando Vosk local…');
+    setStatus(`Comprobando ${engineLabel()} local…`);
     const response = await fetch(`${API}/live/status`, { cache: 'no-store', mode: 'cors' });
-    if (!response.ok) throw new Error(`Estado de Vosk: HTTP ${response.status}`);
+    if (!response.ok) throw new Error(`Estado de STT: HTTP ${response.status}`);
     const availability = await response.json();
-    const selectedLanguage = language.value;
-    if (!availability.languages?.[selectedLanguage]?.available) {
-      throw new Error(`Vosk (${selectedLanguage}) no está disponible. Revisa requirements-live.txt y los modelos.`);
+    if (revision !== captureRevision || !busy || stopping) return;
+    const selected = availability.providers?.[selectedProvider] ?? (selectedProvider === 'vosk' ? availability : null);
+    if (!selected?.languages?.[selectedLanguage]?.available) {
+      throw new Error(`${engineLabel()} (${selectedLanguage}) no está disponible. Revisa el runtime y modelo local; no hay fallback automático.`);
     }
     const session = await postJson('/sessions', { mode: 'live' });
+    if (revision !== captureRevision || !busy || stopping) return;
     const grant = await postJson(`/sessions/${encodeURIComponent(session.id)}/live-token`, {
-      language: selectedLanguage, consent: true,
+      language: selectedLanguage, provider: selectedProvider, consent: true,
     });
-    if (!busy || stopping) return;
-    setStatus('Conectando con Vosk…');
+    if (revision !== captureRevision || !busy || stopping) return;
+    setStatus(`Cargando ${engineLabel()} local…`);
     socket = new WebSocket(SOCKET);
-    socket.onopen = () => socket?.send(JSON.stringify({ type: 'start', token: grant.token }));
+    const connection = socket;
+    socket.onopen = () => {
+      if (revision === captureRevision && busy && !stopping) connection.send(JSON.stringify({ type: 'start', token: grant.token,
+        provider: selectedProvider, language: selectedLanguage }));
+    };
     socket.onmessage = event => {
+      if (revision !== captureRevision) return;
       let packet;
       try { packet = JSON.parse(event.data); } catch { return; }
       if (packet.type === 'generated_suggestion' && stopping) return;
       if (['partial','final','suggestion','generated_suggestion'].includes(packet.type)) publish(packet);
       if (packet.type === 'ready') {
-        if (packet.sample_rate !== 16000 || packet.sample_format !== 'pcm_s16le' || packet.channels !== 1) {
+        if (packet.provider !== selectedProvider || packet.language !== selectedLanguage) {
+          void fail(new Error('El motor o idioma autorizado es diferente'));
+        } else if (packet.sample_rate !== 16000 || packet.sample_format !== 'pcm_s16le' || packet.channels !== 1) {
           void fail(new Error('El formato requerido por el backend es diferente'));
         } else {
-          void beginPcm().catch(fail);
+          void beginPcm(revision).catch(error => { if (revision === captureRevision) void fail(error); });
         }
       } else if (packet.type === 'partial') {
         partial.textContent = packet.text || 'Escuchando…';
       } else if (packet.type === 'final') {
+        const latency = packet.end_of_speech_latency_ms;
+        speechLatency.textContent = typeof latency === 'number' && Number.isFinite(latency) && latency >= 0 && latency <= 120000
+          ? `EOS a resultado STT (estimado en backend): ${(latency / 1000).toFixed(2)} s. No incluye captura/IPC.`
+          : 'Sin medida EOS (Vosk o corte por límite).';
         const text = document.createElement('p');
         text.textContent = packet.text;
         finals.appendChild(text);
@@ -226,25 +281,26 @@ start.addEventListener('click', async () => {
         void fail(new Error(`${packet.code}: ${packet.message}`));
       }
     };
-    socket.onerror = () => { if (!stopping) void fail(new Error('Falló la conexión WebSocket con Vosk')); };
+    socket.onerror = () => { if (revision === captureRevision && !stopping) void fail(new Error('Falló la conexión WebSocket con STT local')); };
     socket.onclose = event => {
-      if (stopping) { void cleanup().then(() => { setStatus('Captura y Vosk detenidos.'); }); }
+      if (revision !== captureRevision) return;
+      if (stopping) { void cleanup().then(done => { if (done === captureRevision) setStatus('Captura y STT detenidos.'); }); }
       else if (busy) void fail(new Error(`WebSocket cerrado: ${event.code}`));
     };
-  } catch (error) { await fail(error); }
+  } catch (error) { if (revision === captureRevision) await fail(error); }
 });
 
 stop.addEventListener('click', () => {
   if (!busy || stopping) return;
   stopping = true;
-  setStatus('Deteniendo; esperando último resultado de Vosk…');
+  setStatus(provider.value === 'vosk' ? 'Deteniendo; esperando último resultado de Vosk…' : 'Deteniendo y cancelando segmentos pendientes…');
   stream?.getTracks().forEach(track => track.stop());
   try { source?.disconnect(worklet); } catch { /* node not connected */ }
   if (socket?.readyState === WebSocket.OPEN) {
     socket.send('stop');
-    stopTimeout = setTimeout(() => { void cleanup().then(() => { setStatus('Captura detenida.'); }); }, 3000);
+    stopTimeout = setTimeout(() => { void cleanup().then(done => { if (done === captureRevision) setStatus('Captura detenida.'); }); }, 3000);
   } else {
-    void cleanup().then(() => { setStatus('Captura detenida.'); });
+    void cleanup().then(done => { if (done === captureRevision) setStatus('Captura detenida.'); });
   }
 });
 window.addEventListener('pagehide', () => { void cleanup(); });

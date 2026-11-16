@@ -39,7 +39,7 @@ Start the backend by double-clicking [`dev-api.bat`](dev-api.bat) in the reposit
 The equivalent manual command, **from the project root**, remains:
 
 ```bat
-.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir apps\api --host 127.0.0.1 --port 8765
+.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir apps\api --host 127.0.0.1 --port 8765 --ws-max-size 64000 --ws-max-queue 4
 ```
 
 Check `http://127.0.0.1:8765/health`, `/live/status` and `/semantic/status`. Availability/index counts do not prove successful transcription or semantic accuracy. Do not start a second backend if the working process is already running. Stop the old `npm run lab:transcribe` before starting desktop; both use Vite port 5173 and the backend allows one transcription connection.
@@ -53,9 +53,29 @@ npm run dev
 
 If `node_modules` is missing, run `npm install` with approval before `npm run dev`.
 
-Open **Live Interview → Preparar captura Live** in the main window. In the new isolated capture window choose English/Español, check consent and click **Iniciar transcripción**. Return to the main Live page to view real-time transcript and source-backed exact/semantic suggestions. Use **Detener y cerrar captura** to stop the capture; the independent lab remains available via `npm run lab:transcribe` if you need to isolate failures.
+Open **Live Interview → Preparar captura Live** in the main window. In the new isolated capture window choose **Vosk (default)** or configured **Faster-Whisper Small (CPU INT8)** and English/Español, check consent and click **Iniciar transcripción**. Provider/language are locked until stop and bound to the single-use Live token. Return to the main Live page to view transcripts and source-backed exact/semantic suggestions. Use **Detener y cerrar captura** to stop capture; the independent lab remains available via `npm run lab:transcribe` if you need to isolate failures.
 
 See [exact Windows acceptance steps](docs/live-mode.md).
+
+### Optional Faster-Whisper Live setup (STT-001A)
+
+Vosk remains the default and explicit working alternative; unavailable/overloaded Whisper never silently switches engine. Live does not install packages, download models, use CUDA or call cloud STT. Whisper produces finals, not fabricated streaming partials. Complete human EN/ES Windows acceptance and the initial end-of-speech p95 target of **≤3 seconds** remain subject to [measured evidence and pending checks](docs/live-mode.md#stt-001a--live-integration).
+
+The backend uses a separate, cancellable local Python worker for Whisper; the main API environment does not need Faster-Whisper installed. Reuse the approved isolated CPU evaluation runtime and already-downloaded **Small multilingual** model. From the project root in CMD, set absolute paths **before** starting/restarting the backend (do not start a second backend):
+
+```bat
+set "COPILOT_WHISPER_PYTHON=%CD%\local-data\stt-evaluation\venv\Scripts\python.exe"
+set "COPILOT_WHISPER_MODEL_DIR=%CD%\local-data\stt-evaluation\models\small"
+dev-api.bat
+```
+
+If these artifacts are absent, obtain owner approval before provisioning another isolated environment/model; [evaluation setup and pinned versions](docs/live-mode.md#cpu-evaluation-method-and-reproduction) are documented, not automatically executed. Do not install into or replace the working `.venv`. Without overrides, the worker uses the current Python executable and expects local files under `local-data/models/faster-whisper-small`; there is no model-name download shortcut. The model directory must contain `model.bin`, `config.json`, `tokenizer.json`, and `vocabulary.txt`; the worker rejects English-only models.
+
+`/live/status` retains Vosk's existing top-level fields and adds `default_provider` / per-provider `providers`. Availability performs a cached, bounded CPU import probe, not an inference/quality guarantee. Bad/unavailable choices fail with clear HTTP/WS errors, preserving Vosk selection. Native startup has a 30 s deadline; inference has a 10 s deadline. CPU INT8 uses four threads and one worker. Run the backend as the documented single-process Windows command (a subprocess-capable event loop is required).
+
+Whisper endpointing uses an energy gate, 200 ms pre-roll, at least 200 ms voiced audio, 500 ms end silence and an 8 s PCM cap. Quiet speech/noisy output can be missed or mis-segmented; forced cuts can split words and do not trigger Ollama or count as measured speech endpoints. One segment may be active and one pending; overload stops capture explicitly (`speech_overloaded`, WS 1013). Vosk reception is bounded to 64,000 queued bytes / 20 frames without changing native recognition semantics. Keep the documented Uvicorn WS size/queue limits; alternate launchers must set equivalent limits.
+
+Whisper stop cancels/discards unfinished and queued segments and reaps its process; Vosk's explicit stop still flushes its last native result, documentary-only. Disconnect, error and session finish suppress late results. A new Whisper session reloads its model rather than keeping a background inference process alive. Audio stays in memory/pipes; the capture window displays an estimated backend speech-end-to-decode latency, excluding capture/network/IPC/display delays. Neither the estimate nor an offline RTF proves the p95 acceptance target.
 
 ## Documents and retrieval
 
@@ -106,7 +126,7 @@ The configured model is `sentence-transformers/paraphrase-multilingual-MiniLM-L1
 - Non-streaming output: 256-token budget, at most 2000 answer characters and 64 KiB HTTP response. Empty, malformed, oversized, tool-call or token-truncated responses fail closed. `GenerationError.code` identifies disabled/configuration/input/provider/timeout/response failures; no fabricated answer replaces errors, and caller cancellation propagates.
 - Results carry `kind="ai_generated"`, configured provider/model and `source=None`: an **unverified suggestion**, never documentary evidence. Fixed instructions prefer 3–5 natural, professional sentences in B2 English or natural Spanish, practical examples, uncertainty and no invented personal experience. User text stays in a separate user message. Instructions are defense-in-depth, not a guarantee of model compliance; no execution capabilities are provided.
 
-Generation runs outside the PCM/Vosk reception loop: one active request per Live connection/session and one replaceable latest pending question, never an accumulating queue. A newer final question invalidates older work even if it has a documentary answer. Stop, disconnect, errors and session finish cancel/suppress pending results; the final recognizer flush on stop remains documentary-only. Cancellation is client-side/best-effort for Ollama's internal inference; the application waits for request cleanup before starting the next call.
+Generation runs outside the PCM/STT reception loop: one active request per Live connection/session and one replaceable latest pending question, never an accumulating queue. A newer final question invalidates older work even if it has a documentary answer. Stop, disconnect, errors and session finish cancel/suppress pending results; the Vosk final recognizer flush on stop remains documentary-only. Cancellation is client-side/best-effort for Ollama's internal inference; the application waits for request cleanup before starting the next call.
 
 The additive `generated_suggestion` event includes `kind`, `session_id`, unique connection-scoped `question_id`, original detected `question`, `language`, `answer`, `provider`, `model` and `source:null`; it never uses documentary `status`/`match_type`. Final documentary suggestion events also carry correlation IDs. The existing capture relay forwards generated events (not after stop begins); Electron validates bounded fields and trusted senders, strips extras and keeps the 80-event history limit. React displays **“Sugerencia generada por IA — revisar”**, provider/model and “Sin respaldo documental”, separately from documentary cards. Content is rendered as text, not HTML. On generation failure, the no-evidence card remains and audio continues.
 
