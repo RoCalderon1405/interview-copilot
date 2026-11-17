@@ -17,6 +17,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 from ..application.stt import FeedResult, SpeechAvailability, SpeechFailure, SpeechUnavailable
+from .technical_vocabulary import keyterms_for
 
 KEY_ENV = "COPILOT_DEEPGRAM_API_KEY"
 MAX_TEXT_CHARS = 3000
@@ -71,14 +72,17 @@ class DeepgramProvider:
                 "languages": {language: {"available": available} for language in sorted(LANGUAGES)},
                 "detail": detail}
 
-    async def open(self, language: str) -> DeepgramSession:
+    async def open(self, language: str, *, vocabulary_profile: str = "general") -> DeepgramSession:
         """Open only the fixed Deepgram host; never log or return the API key."""
         if language not in LANGUAGES or not self.availability()["available"]:
             raise SpeechUnavailable("deepgram_unavailable")
         from websockets.asyncio.client import connect
 
-        query = {**QUERY, "language": LANGUAGE_CODES[language]}
-        url = UPSTREAM + "?" + urlencode(query)
+        # Each keyterm must be a separate URL parameter. Only trusted, bounded
+        # server-side profiles are allowed; client-supplied vocabulary is never used.
+        query = {**QUERY, "language": LANGUAGE_CODES[language],
+                 "keyterm": keyterms_for(vocabulary_profile, language)}
+        url = UPSTREAM + "?" + urlencode(query, doseq=True)
         try:
             connection = await connect(
                 url,

@@ -72,6 +72,12 @@ class SpeechProvider(Protocol):
     async def open(self, language: str) -> SpeechSession: ...
 
 
+class ProfiledSpeechProvider(SpeechProvider, Protocol):
+    """Opt-in cloud provider that accepts an allowlisted technical vocabulary."""
+
+    async def open(self, language: str, *, vocabulary_profile: str = "general") -> SpeechSession: ...
+
+
 class TranscriptionControl:
     """Allow session finish to interrupt startup/inference and await full teardown."""
 

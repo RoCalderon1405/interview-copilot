@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections import deque
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,6 +12,8 @@ from starlette.websockets import WebSocketDisconnect
 
 from app.application.stt import FeedResult, SpeechFailure, SpeechOverloaded, StreamingTranscriptionPump
 from app.infrastructure.deepgram import DeepgramProvider, DeepgramSession
+from app.infrastructure.technical_vocabulary import (GLOSSARY, PROFILE_GROUPS,
+                                                    MAX_ACTIVE_KEYTERMS, MAX_ACTIVE_CHARACTERS, keyterms_for)
 from app.main import create_app
 from app.parsers import ParsedEntry
 
@@ -167,12 +170,14 @@ class FakeCloudProvider:
     def __init__(self):
         self.session = None
         self.languages = []
+        self.profiles = []
     def availability(self):
         return {"provider": "deepgram", "available": True, "runtime_installed": True,
                 "languages": {name: {"available": True} for name in ("en-US", "es-MX")},
                 "detail": "Synthetic cloud"}
-    async def open(self, language):
+    async def open(self, language, *, vocabulary_profile="general"):
         self.languages.append(language)
+        self.profiles.append(vocabulary_profile)
         self.session = FakeCloudSession()
         return self.session
 
@@ -203,7 +208,8 @@ def test_deepgram_reuses_final_only_retrieval_and_local_capture_contract(tmp_pat
         assert status["providers"]["deepgram"]["available"]
         sid = client.post("/sessions", json={"mode": "live"}).json()["id"]
         token_response = client.post(f"/sessions/{sid}/live-token", json={
-            "language": "en-US", "provider": "deepgram", "consent": True})
+            "language": "en-US", "provider": "deepgram", "consent": True,
+            "vocabulary_profile": "data-analyst"})
         assert token_response.status_code == 200
         token = token_response.json()["token"]
         with client.websocket_connect("/live/transcribe", headers=HEADERS) as ws:
@@ -220,5 +226,121 @@ def test_deepgram_reuses_final_only_retrieval_and_local_capture_contract(tmp_pat
             ws.send_text("stop")
             with pytest.raises(WebSocketDisconnect):
                 ws.receive_json()
-        assert fake.languages == ["en-US"] and fake.session.closed
+        assert fake.languages == ["en-US"] and fake.profiles == ["data-analyst"] and fake.session.closed
     assert not list(tmp_path.rglob("*.wav"))
+
+
+@pytest.mark.parametrize("profile", tuple(PROFILE_GROUPS))
+@pytest.mark.parametrize("language", ["en-US", "es-MX"])
+def test_vocabulary_profiles_are_bounded_and_deterministic(profile, language):
+    first = keyterms_for(profile, language)
+    assert first == keyterms_for(profile, language)
+    assert 20 <= len(first) <= MAX_ACTIVE_KEYTERMS
+    assert sum(map(len, first)) <= MAX_ACTIVE_CHARACTERS
+    assert len({term.casefold() for term in first}) == len(first)
+    assert "GraphQL" in first
+    assert not any("\n" in term or "\r" in term or ":0.15" in term for term in first)
+
+
+def test_technical_glossary_covers_all_professions_and_subfields():
+    assert len(GLOSSARY) >= 12
+    unique = {value.casefold() for terms in GLOSSARY.values() for value in terms}
+    assert len(unique) >= 500
+    for term in ("GraphQL", "Kubernetes", "Model Context Protocol", "LangGraph",
+                 "Power BI", "DAX", "Snowflake", "Databricks", "Terraform",
+                 "OAuth", "Playwright", "SwiftUI", "Apache Airflow"):
+        assert term.casefold() in unique
+    assert "Power BI" in keyterms_for("data-analyst")
+    assert "Kubernetes" in keyterms_for("cloud-devops")
+    assert "Machine Learning" in keyterms_for("ai-engineer")
+
+
+def test_vocabulary_rejects_profiles_and_languages_not_on_the_allowlist():
+    with pytest.raises(ValueError, match="unsupported_vocabulary_profile"):
+        keyterms_for("freeform injection", "en-US")
+    with pytest.raises(ValueError, match="unsupported_vocabulary_language"):
+        keyterms_for("general", "fr-FR")
+
+
+def test_deepgram_sends_repeated_encoded_keyterms_for_selected_profile(monkeypatch):
+    import websockets.asyncio.client as client_module
+
+    received = []
+
+    async def connect(url, **kwargs):
+        received.append((url, kwargs))
+        return FakeConnection()
+
+    monkeypatch.setattr(client_module, "connect", connect)
+
+    async def run():
+        provider = DeepgramProvider({"COPILOT_DEEPGRAM_API_KEY": "secret-value"})
+        session = await provider.open("en-US", vocabulary_profile="ai-engineer")
+        await session.close()
+
+    asyncio.run(run())
+    url, kwargs = received[0]
+    params = parse_qs(urlparse(url).query)
+    assert params["model"] == ["nova-3"]
+    assert params["language"] == ["en-US"]
+    assert params["keyterm"] == list(keyterms_for("ai-engineer", "en-US"))
+    assert params["keyterm"].count("GraphQL") == 1
+    assert "Machine Learning" in params["keyterm"]
+    assert "keywords" not in params
+    assert "keyterm=Machine+Learning" in url
+    assert "secret-value" not in url
+    assert kwargs["additional_headers"]["Authorization"] == "Token secret-value"
+
+
+def test_unknown_vocabulary_profile_rejected_before_any_cloud_connection(tmp_path):
+    app = create_app(tmp_path)
+    app.state.live.deepgram = FakeCloudProvider()
+    with TestClient(app) as client:
+        sid = client.post("/sessions", json={"mode": "live"}).json()["id"]
+        response = client.post(f"/sessions/{sid}/live-token", json={
+            "language": "en-US", "provider": "deepgram", "consent": True,
+            "vocabulary_profile": "../../invalid", 
+        })
+        assert response.status_code == 422
+        assert app.state.live.deepgram.profiles == []
+
+
+def test_deepgram_recognized_direct_comparison_reaches_suggestion(tmp_path):
+    """A completed cloud final must reach detection, even with no stored match."""
+    class ComparisonSession(FakeCloudSession):
+        async def feed(self, pcm):
+            await self.events.put(FeedResult(final="compare rest and graft twelve"))
+            return FeedResult()
+
+    class ComparisonProvider(FakeCloudProvider):
+        async def open(self, language, *, vocabulary_profile="general"):
+            self.languages.append(language)
+            self.profiles.append(vocabulary_profile)
+            self.session = ComparisonSession()
+            return self.session
+
+    app = create_app(tmp_path)
+    fake = ComparisonProvider()
+    app.state.live.deepgram = fake
+    with TestClient(app) as client:
+        sid = client.post("/sessions", json={"mode": "live"}).json()["id"]
+        grant = client.post(f"/sessions/{sid}/live-token", json={
+            "language": "en-US", "provider": "deepgram", "consent": True,
+            "vocabulary_profile": "fullstack",
+        })
+        assert grant.status_code == 200
+        with client.websocket_connect("/live/transcribe", headers=HEADERS) as ws:
+            ws.send_json({"type": "start", "token": grant.json()["token"],
+                          "provider": "deepgram", "language": "en-US"})
+            assert ws.receive_json()["type"] == "ready"
+            ws.send_bytes(bytes(3200))
+            final = ws.receive_json()
+            suggestion = ws.receive_json()
+            assert final["type"] == "final"
+            assert suggestion["type"] == "suggestion", suggestion
+            assert suggestion["question"] == "compare rest and graft twelve"
+            assert suggestion["status"] == "no_evidence"
+            ws.send_text("stop")
+            with pytest.raises(WebSocketDisconnect):
+                ws.receive_json()
+    assert fake.profiles == ["fullstack"]

@@ -13,8 +13,8 @@ function harness({selected = 'vosk', available = true, deferCapture = false} = {
   let resolveCapture;
   function element(id) {
     if (!elements.has(id)) elements.set(id, {
-      value: id === 'provider' ? selected : id === 'language' ? 'en-US' : '',
-      disabled: false, checked: id === 'consent', textContent: '', style: {}, handlers: {},
+      value: id === 'provider' ? selected : id === 'language' ? 'en-US' : id === 'vocabulary-profile' ? 'general' : '',
+      disabled: id === 'vocabulary-profile' && selected !== 'deepgram', checked: id === 'consent', textContent: '', style: {}, handlers: {},
       addEventListener(type, handler) { this.handlers[type] = handler; },
       replaceChildren() {}, appendChild() {},
     });
@@ -78,7 +78,7 @@ test('Vosk remains the HTML default and capture stays directly in the click', as
   assert.equal(h.element('language').disabled, true);
   await pending;
   const grant = h.calls.find(call => call[0] === 'fetch' && call[1].endsWith('/live-token'));
-  assert.deepEqual(grant[2], {language: 'en-US', provider: 'vosk', consent: true});
+  assert.deepEqual(grant[2], {language: 'en-US', provider: 'vosk', consent: true, vocabulary_profile: 'general'});
 });
 
 test('Whisper provider is bound in token/start, verified on ready, and reset on stop', async () => {
@@ -143,11 +143,13 @@ test('Deepgram requires renewed cloud consent and binds provider in the authoriz
   assert.equal(h.element('consent').checked, false);
   assert.equal(h.element('start').disabled, true);
   assert.match(h.element('consent-description').textContent, /Deepgram.*nube/);
+  assert.equal(h.element('vocabulary-profile').disabled, false);
+  h.element('vocabulary-profile').value = 'ai-engineer';
   h.element('consent').checked = true;
   h.element('consent').handlers.change();
   await h.element('start').handlers.click();
   const grant = h.calls.find(call => call[0] === 'fetch' && call[1].endsWith('/live-token'));
-  assert.deepEqual(grant[2], {language: 'en-US', provider: 'deepgram', consent: true});
+  assert.deepEqual(grant[2], {language: 'en-US', provider: 'deepgram', consent: true, vocabulary_profile: 'ai-engineer'});
   const socket = h.sockets[0];
   socket.onopen();
   assert.deepEqual(JSON.parse(socket.sent[0]), {
@@ -161,4 +163,23 @@ test('Deepgram requires renewed cloud consent and binds provider in the authoriz
   assert.equal(h.element('partial').textContent, 'Could you explain');
   socket.onmessage({data: JSON.stringify({type: 'final', text: 'Could you explain authentication?', language: 'en-US'})});
   assert.equal(h.element('partial').textContent, 'Escuchando…');
+});
+
+
+test('Vocabulary profile is visible only for Deepgram and cannot change mid-session', async () => {
+  const html = fs.readFileSync(path.join(__dirname, 'transcribe.html'), 'utf8');
+  assert.match(html, /value="data-analyst"/);
+  assert.match(html, /value="ai-engineer"/);
+  const h = harness({selected: 'vosk'});
+  assert.equal(h.element('vocabulary-profile').disabled, true);
+  h.element('provider').value = 'deepgram';
+  h.element('provider').handlers.change();
+  assert.equal(h.element('vocabulary-profile').disabled, false);
+  h.element('consent').checked = true;
+  await h.element('start').handlers.click();
+  assert.equal(h.element('vocabulary-profile').disabled, true);
+  h.element('stop').handlers.click();
+  h.sockets[0].onclose({code: 1000});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.element('vocabulary-profile').disabled, false);
 });

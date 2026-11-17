@@ -15,6 +15,21 @@
       <select id="provider"><option value="vosk" selected>Vosk (predeterminado)</option><option value="faster-whisper">Faster-Whisper Small (CPU INT8)</option><option value="deepgram">Deepgram Nova-3 (nube, de pago)</option></select>
     </label>
     <p id="speech-status" class="muted" role="status">Consultando motores…</p>
+    <label for="vocabulary-profile">Perfil de entrevista (vocabulario técnico de Deepgram)
+      <select id="vocabulary-profile" disabled>
+        <option value="general" selected>General de tecnología</option>
+        <option value="frontend">Frontend</option>
+        <option value="backend">Backend</option>
+        <option value="fullstack">Full Stack</option>
+        <option value="ai-engineer">AI Engineer / Machine Learning</option>
+        <option value="data-analyst">Data Analyst / BI</option>
+        <option value="data-engineer">Data Engineer</option>
+        <option value="cloud-devops">Cloud / DevOps / SRE</option>
+        <option value="security">Cybersecurity / AppSec</option>
+        <option value="qa">QA / Test Automation</option>
+        <option value="mobile">Mobile Development</option>
+      </select>
+    </label>
     <label for="language">Idioma
       <select id="language"><option value="en-US">English</option><option value="es-MX">Español</option></select>
     </label>

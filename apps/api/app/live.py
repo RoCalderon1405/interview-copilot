@@ -30,7 +30,7 @@ from fastapi import APIRouter, HTTPException, Request, WebSocket
 from pydantic import BaseModel
 
 from .application.stt import (FeedResult, SpeechUnavailable, SpeechFailure, SpeechOverloaded,
-                              SpeechProvider, SpeechSession, TranscriptionControl, TranscriptionPump,
+                              SpeechProvider, ProfiledSpeechProvider, SpeechSession, TranscriptionControl, TranscriptionPump,
                                StreamingSpeechSession, StreamingTranscriptionPump)
 from .infrastructure.vosk import VoskModelCache, MODEL_DIRECTORIES, default_models_root, _final_result
 from .bootstrap import create_deepgram_provider, create_whisper_provider
@@ -38,6 +38,7 @@ from .retrieval import suggest_live
 from .live_generation import LiveGeneration
 from .store import KnowledgeStore
 from .textnorm import normalize
+from .infrastructure.technical_vocabulary import VocabularyProfile
 
 Language = Literal["en-US", "es-MX"]
 Provider = Literal["vosk", "faster-whisper", "deepgram"]
@@ -103,11 +104,13 @@ _EMBEDDED_QUESTION_INTRO = re.compile(
 # Heuristics only: these are question cues, not semantic question detection.
 _EN_CUES = re.compile(
     r"^(?:what|why|how|when|where|who|whom|whose|which|can you|could you|would you|will you|"
-    r"do you|did you|does|are you|have you|has|is|tell me|describe|walk me through|explain)\b"
+    r"do you|did you|does|are you|have you|has|is|tell me|tell us about|"
+    r"describe|walk me through|walk us through|explain|compare|outline|give me an example of)\b"
 )
 _ES_CUES = re.compile(
     r"^(?:que|como|cuando|donde|quien|cual|cuanto|puedes|podrias|me puedes|me podrias|"
-    r"cuentame|hablame|describe|dime|explica)\b"
+    r"cuentame|cuentanos|hablame|hablanos|describe|dime|explica|explicanos|"
+    r"compara|dame un ejemplo de)\b"
 )
 
 # Only marked conversational boundaries are searched inside finals. Requiring
@@ -118,12 +121,14 @@ _DIRECT_QUESTION = re.compile(
     r"(?:is|are|was|were|do|does|did|can|could|would|will|should|have|has)\b|"
     r"why\s+(?:use|choose|prefer|avoid|test)\b|"
     r"(?:can|could|would|will|do|did|are|have)\s+you\b|"
-    r"tell me\b|describe\b|walk me through\b|explain\b|"
+    r"tell me\b|tell us about\b|describe\b|walk me through\b|"
+    r"walk us through\b|explain\b|compare\b|outline\b|give me an example of\b|"
     r"(?:que|cual)\s+(?:es|son)\b|por que\b|"
     r"como\s+(?:resuelves|manejas|manejarias|eliges|elegirias|implementas|"
     r"implementarias|disenas|disenarias|pruebas|probarias|funciona)\b|"
     r"puedes\b|podrias\b|me puedes\b|me podrias\b|"
-    r"cuentame\b|hablame\b|describe\b|dime\b|explica\b)"
+    r"cuentame\b|cuentanos\b|hablame\b|hablanos\b|describe\b|dime\b|"
+    r"explica\b|explicanos\b|compara\b|dame un ejemplo de\b)"
 )
 _FINAL_BOUNDARY = re.compile(
     r"\b(?:(?:and|so|y|entonces)\s+)?(?P<intro>"
@@ -152,12 +157,46 @@ _SUBORDINATE_PROMPT = re.compile(
 )
 
 
+# Narrow, transcript-only rejection of instructions about monitoring the
+# copilot's display. Such utterances appeared in the owner's real Windows
+# Deepgram tests; they are not interview questions even when they start with
+# "tell me". Avoid blanket topic/keyword filters: "explain screen sharing"
+# or "tell me about a transcription service" may be genuine interview prompts.
+_OBSERVATION_REQUEST = re.compile(
+    r"^(?:(?:tell me|let me know|dime|avisame)\s+(?:if|whether|what|si|que)\b|"
+    r"(?:do|can|could) you (?:see|check)\b|(?:ves|puedes ver)\b)"
+)
+_DISPLAY_SUBJECT = re.compile(
+    r"\b(?:text|texto|transcript|transcription|transcripcion|screen|pantalla)\b"
+)
+_DISPLAY_OBSERVATION = re.compile(
+    r"\b(?:appear|appears|appearing|show|shows|showing|see|display|displayed|"
+    r"visible|aparece|aparecen|muestra|muestran|ves|ver)\b|show up|se ve"
+)
+
+
+def _is_capture_observation_request(text: str) -> bool:
+    """Reject clearly operational display checks, not generic interview prompts.
+
+    This is deliberately conservative: text alone cannot identify the speaker,
+    and a technical question about a UI may be ambiguous. The check runs on
+    both partial and final candidates but never hides the transcript itself.
+    """
+    normalized = normalize(text)
+    return bool(
+        _OBSERVATION_REQUEST.match(normalized)
+        and _DISPLAY_SUBJECT.search(normalized)
+        and _DISPLAY_OBSERVATION.search(normalized)
+    )
+
+
 @dataclass(frozen=True)
 class LiveGrant:
     session_id: str
     language: str
     expires_at: float
     provider: str = "vosk"
+    vocabulary_profile: str = "general"
 
 
 def _detect_partial_questions(text: str, limit: int = MAX_QUESTION_CANDIDATES) -> list[str]:
@@ -194,6 +233,8 @@ def _detect_partial_questions(text: str, limit: int = MAX_QUESTION_CANDIDATES) -
         if not is_punctuated_question and not (_EN_CUES.match(normalized) or _ES_CUES.match(normalized)):
             continue
         candidate = chunk.rstrip(" \t?!.;,").strip()
+        if _is_capture_observation_request(candidate):
+            continue
         key = normalize(candidate)
         if not key or key in seen:
             continue
@@ -256,6 +297,8 @@ def detect_questions(text: str, limit: int = MAX_QUESTION_CANDIDATES) -> list[st
             candidate = _QUESTION_INTRO.sub(
                 "", _LEADING_FILLER.sub("", segment.strip()), count=1
             ).rstrip(" \t?!.;,").strip()
+            if _is_capture_observation_request(candidate):
+                continue
             key = normalize(candidate)
             if not key or key in seen:
                 continue
@@ -362,7 +405,8 @@ class LiveTokenManager:
         self._tokens: dict[str, LiveGrant] = {}
         self._lock = threading.Lock()
 
-    def issue(self, session_id: str, language: str, provider: str = "vosk") -> str:
+    def issue(self, session_id: str, language: str, provider: str = "vosk",
+              vocabulary_profile: str = "general") -> str:
         with self._lock:
             now = self.clock()
             self._prune(now)
@@ -371,7 +415,7 @@ class LiveTokenManager:
             if len(self._tokens) >= self.capacity:
                 self._tokens.pop(next(iter(self._tokens)))
             token = secrets.token_urlsafe(32)
-            self._tokens[token] = LiveGrant(session_id, language, now + self.ttl_seconds, provider)
+            self._tokens[token] = LiveGrant(session_id, language, now + self.ttl_seconds, provider, vocabulary_profile)
             return token
 
     def consume(self, token: str) -> LiveGrant | None:
@@ -391,7 +435,7 @@ class LiveRuntime:
 
     def __init__(self, models: VoskModelCache | None = None, clock: Callable[[], float] = time.monotonic,
                  whisper: SpeechProvider | None = None,
-                 deepgram: SpeechProvider | None = None):
+                 deepgram: ProfiledSpeechProvider | None = None):
         self.models = models or VoskModelCache()
         self.whisper = whisper or create_whisper_provider()
         self.deepgram = deepgram or create_deepgram_provider()
@@ -569,7 +613,9 @@ async def _open_speech(websocket: WebSocket, runtime: LiveRuntime, grant: LiveGr
     """Watch stop/disconnect during native startup, not just after model loading."""
     selected = {"vosk": runtime.models, "faster-whisper": runtime.whisper,
                 "deepgram": runtime.deepgram}[grant.provider]
-    opening = asyncio.create_task(selected.open(grant.language))
+    # Only the opt-in cloud recognizer accepts a vocabulary profile.
+    opening = (asyncio.create_task(runtime.deepgram.open(grant.language, vocabulary_profile=grant.vocabulary_profile))
+               if grant.provider == "deepgram" else asyncio.create_task(selected.open(grant.language)))
     incoming = asyncio.create_task(websocket.receive())
     stopping = asyncio.create_task(control.stop.wait())
     claimed = False
@@ -784,6 +830,7 @@ router = APIRouter()
 class LiveTokenRequest(BaseModel):
     language: Language
     provider: Provider = "vosk"
+    vocabulary_profile: VocabularyProfile = "general"
     # Consent is an explicit opt-in; a missing or false value is rejected by validation.
     consent: Literal[True]
 
@@ -814,7 +861,8 @@ def create_live_token(session_id: str, request: LiveTokenRequest, http_request: 
     if not status.get("languages", {}).get(request.language, {}).get("available"):
         raise HTTPException(status_code=503, detail=f"Selected provider ({request.provider}) is unavailable for {request.language}. "
                             "Check the selected runtime/model or cloud API Key; no automatic fallback.")
-    token = runtime.tokens.issue(session_id, request.language, request.provider)
+    profile = request.vocabulary_profile if request.provider == "deepgram" else "general"
+    token = runtime.tokens.issue(session_id, request.language, request.provider, profile)
     return {
         "token": token,
         "session_id": session_id,

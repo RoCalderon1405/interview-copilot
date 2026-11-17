@@ -8,6 +8,7 @@ const start = document.getElementById('start');
 const stop = document.getElementById('stop');
 const language = document.getElementById('language');
 const provider = document.getElementById('provider');
+const vocabularyProfile = document.getElementById('vocabulary-profile');
 const speechStatus = document.getElementById('speech-status');
 const speechLatency = document.getElementById('speech-latency');
 const status = document.getElementById('status');
@@ -75,6 +76,7 @@ provider.addEventListener('change', () => {
   consent.checked = false;
   start.disabled = true;
   updateConsent();
+  vocabularyProfile.disabled = !isCloud();
   void updateSpeechStatus();
 });
 language.addEventListener('change', () => { void updateSpeechStatus(); });
@@ -130,6 +132,7 @@ async function cleanup() {
   stop.disabled = true;
   language.disabled = false;
   provider.disabled = false;
+  vocabularyProfile.disabled = !isCloud();
   start.disabled = !consent.checked;
   level.style.width = '0%';
   if (closingContext) { try { await closingContext.close(); } catch { /* already closed */ } }
@@ -170,6 +173,7 @@ start.addEventListener('click', async () => {
   start.disabled = true;
   language.disabled = true;
   provider.disabled = true;
+  vocabularyProfile.disabled = true;
   const selectedProvider = provider.value;
   const selectedLanguage = language.value;
   stop.disabled = false;
@@ -216,6 +220,7 @@ start.addEventListener('click', async () => {
     if (revision !== captureRevision || !busy || stopping) return;
     const grant = await postJson(`/sessions/${encodeURIComponent(session.id)}/live-token`, {
       language: selectedLanguage, provider: selectedProvider, consent: true,
+      vocabulary_profile: selectedProvider === 'deepgram' ? vocabularyProfile.value : 'general',
     });
     if (revision !== captureRevision || !busy || stopping) return;
     setStatus(`Conectando con ${engineLabel()}…`);

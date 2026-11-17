@@ -222,6 +222,79 @@ def test_question_detection_handles_spoken_introductions_without_false_embedded_
     assert detect_questions(spoken_final) == expected
 
 
+@pytest.mark.parametrize(
+    "spoken_final",
+    [
+        "Tell me about your experience with React",
+        "Walk us through how you designed a REST API",
+        "Compare REST and GraphQL",
+        "Outline a strategy for testing an API",
+        "Give me an example of a production issue you solved",
+        "Tell me if you would use Redis for this scenario",
+        "Cuéntanos sobre tu experiencia con React",
+        "Compara SQL y NoSQL",
+        "Dame un ejemplo de una API que diseñaste",
+        "Explícanos cómo manejarías un problema en producción",
+    ],
+)
+def test_det002_accepts_implicit_interview_requests(spoken_final):
+    """Interview prompts may be imperatives without a question mark."""
+    assert detect_questions(spoken_final) == [spoken_final]
+
+
+@pytest.mark.parametrize(
+    "spoken_final",
+    [
+        "Tell me what appears on the screen",
+        "Tell me if text appears before you're finished speaking, and then the final text",
+        "Tell me if you see text appear mid sentence and then the final text",
+        "Tell me if text shows up while you're still talking and the final text",
+        "Could you see the text appearing on the screen?",
+        "Dime si el texto aparece en pantalla",
+        "Avísame si la transcripción se muestra en pantalla",
+        "Dime qué aparece en pantalla",
+    ],
+)
+def test_det002_ignores_capture_observation_instructions(spoken_final):
+    """Operational display checks must not trigger documentary/LLM queries."""
+    assert detect_questions(spoken_final) == []
+
+
+@pytest.mark.parametrize(
+    "spoken_final",
+    [
+        "Explain how screen sharing permissions work",
+        "Tell me about a transcription service you built",
+        "How would you debug a slow UI render?",
+        "Tell me what a screen reader does",
+        "Explica cómo funciona la transcripción en tiempo real",
+    ],
+)
+def test_det002_preserves_technical_topics_about_display_and_transcription(spoken_final):
+    """Screen and transcript vocabulary alone must never suppress a prompt."""
+    assert detect_questions(spoken_final) == [spoken_final.rstrip("?")]
+
+
+def test_det002_operational_final_is_visible_but_never_retrieved(tmp_path):
+    """The original transcript remains visible without a false Q&A card."""
+    spoken = "Tell me if you see text appear mid sentence and then the final text"
+    app, _ = fake_client(tmp_path, [FeedResult(final=spoken)])
+    store = CountingStore(app.state.store)
+    app.state.store = store
+    with TestClient(app) as client:
+        _, token = create_live(client)
+        with client.websocket_connect("/live/transcribe", headers=ALLOWED_HEADERS) as ws:
+            assert start(ws, token)["type"] == "ready"
+            ws.send_bytes(pcm_frame())
+            final = ws.receive_json()
+            assert final["type"] == "final"
+            assert final["text"] == spoken
+            ws.send_text("stop")
+            with pytest.raises(WebSocketDisconnect):
+                ws.receive_json()
+    assert store.exact_calls == 0
+
+
 def test_detector_is_documented_heuristic_not_semantic():
     """Cue-prefix matching is lexical; a statement that starts with a cue is accepted."""
     assert detect_questions("How I learned Python was through projects.") == [
