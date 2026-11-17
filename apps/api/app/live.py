@@ -23,23 +23,24 @@ import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Callable, Literal
+from typing import Callable, Literal, cast
 
 import anyio
 from fastapi import APIRouter, HTTPException, Request, WebSocket
 from pydantic import BaseModel
 
 from .application.stt import (FeedResult, SpeechUnavailable, SpeechFailure, SpeechOverloaded,
-                              SpeechProvider, SpeechSession, TranscriptionControl, TranscriptionPump)
+                              SpeechProvider, SpeechSession, TranscriptionControl, TranscriptionPump,
+                               StreamingSpeechSession, StreamingTranscriptionPump)
 from .infrastructure.vosk import VoskModelCache, MODEL_DIRECTORIES, default_models_root, _final_result
-from .bootstrap import create_whisper_provider
+from .bootstrap import create_deepgram_provider, create_whisper_provider
 from .retrieval import suggest_live
 from .live_generation import LiveGeneration
 from .store import KnowledgeStore
 from .textnorm import normalize
 
 Language = Literal["en-US", "es-MX"]
-Provider = Literal["vosk", "faster-whisper"]
+Provider = Literal["vosk", "faster-whisper", "deepgram"]
 
 SAMPLE_RATE = 16000
 MAX_FRAME_BYTES = 64000
@@ -389,9 +390,11 @@ class LiveRuntime:
     """Process-wide Live resources: token store and the single connection slot."""
 
     def __init__(self, models: VoskModelCache | None = None, clock: Callable[[], float] = time.monotonic,
-                 whisper: SpeechProvider | None = None):
+                 whisper: SpeechProvider | None = None,
+                 deepgram: SpeechProvider | None = None):
         self.models = models or VoskModelCache()
         self.whisper = whisper or create_whisper_provider()
+        self.deepgram = deepgram or create_deepgram_provider()
         self.clock = clock
         self.tokens = LiveTokenManager(clock=clock)
         self.idle_timeout_seconds = IDLE_TIMEOUT_SECONDS
@@ -564,8 +567,9 @@ async def _emit_stable_partial_exact(
 async def _open_speech(websocket: WebSocket, runtime: LiveRuntime, grant: LiveGrant,
                        control: TranscriptionControl) -> SpeechSession | None:
     """Watch stop/disconnect during native startup, not just after model loading."""
-    opening = asyncio.create_task(runtime.whisper.open(grant.language) if grant.provider == "faster-whisper"
-                                  else runtime.models.open(grant.language))
+    selected = {"vosk": runtime.models, "faster-whisper": runtime.whisper,
+                "deepgram": runtime.deepgram}[grant.provider]
+    opening = asyncio.create_task(selected.open(grant.language))
     incoming = asyncio.create_task(websocket.receive())
     stopping = asyncio.create_task(control.stop.wait())
     claimed = False
@@ -634,8 +638,8 @@ async def _run_transcription(websocket: WebSocket, runtime: LiveRuntime, store: 
     if "language" in payload and payload["language"] != grant.language:
         await _fail(websocket, "language_mismatch", "The token is bound to a different language")
         return
-    if grant.provider not in {"vosk", "faster-whisper"}:
-        await _fail(websocket, "unsupported_provider", "Unsupported local speech provider")
+    if grant.provider not in {"vosk", "faster-whisper", "deepgram"}:
+        await _fail(websocket, "unsupported_provider", "Unsupported speech provider")
         return
     if "provider" in payload and payload["provider"] != grant.provider:
         await _fail(websocket, "provider_mismatch", "The token is bound to a different provider")
@@ -658,10 +662,10 @@ async def _run_transcription(websocket: WebSocket, runtime: LiveRuntime, store: 
             return
         websocket.state.speech_session = speech
     except SpeechUnavailable:
-        await _fail(websocket, "speech_unavailable", "Selected local speech provider/runtime/model is unavailable", 1013)
+        await _fail(websocket, "speech_unavailable", "Selected speech provider/runtime/configuration is unavailable", 1013)
         return
     except Exception:
-        await _fail(websocket, "speech_error", "Local speech recognition could not start", 1011)
+        await _fail(websocket, "speech_error", "Selected speech recognition could not start", 1011)
         return
 
     language = grant.language
@@ -678,13 +682,15 @@ async def _run_transcription(websocket: WebSocket, runtime: LiveRuntime, store: 
             raise SpeechFailure("transcript_too_large")
         if result.partial:
             await _send_live(websocket, {"type": "partial", "text": result.partial, "language": language})
-            await _emit_stable_partial_exact(websocket, store, result.partial, language, stable_partial, dedupe)
+            if grant.provider != "deepgram":
+                await _emit_stable_partial_exact(websocket, store, result.partial, language, stable_partial, dedupe)
         if result.final:
             stable_partial.reset()
             await _emit_final(websocket, runtime, store, result, language, dedupe,
                               generation if not stopping and result.utterance_complete else None)
 
-    pump = TranscriptionPump(speech, segmented=grant.provider == "faster-whisper", emit=emit)
+    pump = (StreamingTranscriptionPump(cast(StreamingSpeechSession, speech), emit=emit) if grant.provider == "deepgram"
+            else TranscriptionPump(speech, segmented=grant.provider == "faster-whisper", emit=emit))
     websocket.state.transcription_pump = pump
     await _send_live(websocket, {
         "type": "ready",
@@ -746,7 +752,7 @@ async def _run_transcription(websocket: WebSocket, runtime: LiveRuntime, store: 
                     await _fail(websocket, "unsupported_control", "Only stop is accepted as text")
                     return
                 pump.stopping = True
-                if grant.provider == "faster-whisper":
+                if grant.provider in {"faster-whisper", "deepgram"}:
                     await _close_live_work(websocket)
                 else:
                     await generation.close()
@@ -755,15 +761,17 @@ async def _run_transcription(websocket: WebSocket, runtime: LiveRuntime, store: 
                 return
             incoming = asyncio.create_task(websocket.receive())
     except SpeechOverloaded:
-        detail = "Try Vosk." if grant.provider == "faster-whisper" else "Check CPU load before restarting Vosk."
+        detail = ("Try Vosk." if grant.provider == "faster-whisper" else
+                  "Check your network before restarting Deepgram." if grant.provider == "deepgram" else
+                  "Check CPU load before restarting Vosk.")
         await _fail(websocket, "speech_overloaded", f"Speech inference cannot keep up; capture stopped. {detail}", 1013)
     except SpeechFailure as exc:
         if exc.args == ("transcript_too_large",):
             await _fail(websocket, "transcript_too_large", f"The transcript exceeded the {MAX_TRANSCRIPT_CHARS} character limit", 1009)
         else:
-            await _fail(websocket, "speech_error", "Local speech recognition failed or exceeded its deadline", 1011)
+            await _fail(websocket, "speech_error", "Selected speech recognition failed or exceeded its deadline", 1011)
     except Exception:
-        await _fail(websocket, "speech_error", "Local speech recognition failed", 1011)
+        await _fail(websocket, "speech_error", "Selected speech recognition failed", 1011)
     finally:
         incoming.cancel()
         stopping.cancel()
@@ -785,7 +793,8 @@ def live_status(request: Request):
     runtime: LiveRuntime = request.app.state.live
     vosk = runtime.models.availability()
     return {**vosk, "default_provider": "vosk",
-            "providers": {"vosk": vosk, "faster-whisper": runtime.whisper.availability()}}
+            "providers": {"vosk": vosk, "faster-whisper": runtime.whisper.availability(),
+                           "deepgram": runtime.deepgram.availability()}}
 
 
 @router.post("/sessions/{session_id}/live-token")
@@ -799,11 +808,12 @@ def create_live_token(session_id: str, request: LiveTokenRequest, http_request: 
     if session["finished_at"]:
         raise HTTPException(status_code=409, detail="Session already finished")
     runtime: LiveRuntime = http_request.app.state.live
-    provider = runtime.models if request.provider == "vosk" else runtime.whisper
+    provider = ({"vosk": runtime.models, "faster-whisper": runtime.whisper,
+                 "deepgram": runtime.deepgram})[request.provider]
     status = provider.availability()
     if not status.get("languages", {}).get(request.language, {}).get("available"):
         raise HTTPException(status_code=503, detail=f"Selected provider ({request.provider}) is unavailable for {request.language}. "
-                            "Check local runtime/model configuration; no automatic fallback.")
+                            "Check the selected runtime/model or cloud API Key; no automatic fallback.")
     token = runtime.tokens.issue(session_id, request.language, request.provider)
     return {
         "token": token,

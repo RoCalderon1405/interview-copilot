@@ -43,6 +43,7 @@ function harness({selected = 'vosk', available = true, deferCapture = false} = {
   const statuses = {languages: {'en-US': {available}}, providers: {
     vosk: {languages: {'en-US': {available}}},
     'faster-whisper': {languages: {'en-US': {available}}},
+    deepgram: {languages: {'en-US': {available}}},
   }};
   const context = {
     document: {getElementById: element, createElement: () => element('created')},
@@ -130,4 +131,34 @@ test('stop while the capture prompt is pending closes late tracks without openin
   assert.equal(h.sockets.length, 0);
   assert.equal(h.calls.some(call => call[0] === 'fetch' && call[1].endsWith('/live-token')), false);
   assert.equal(h.element('provider').disabled, false);
+});
+
+
+test('Deepgram requires renewed cloud consent and binds provider in the authorized session', async () => {
+  const html = fs.readFileSync(path.join(__dirname, 'transcribe.html'), 'utf8');
+  assert.match(html, /value="deepgram"/);
+  const h = harness({selected: 'vosk'});
+  h.element('provider').value = 'deepgram';
+  h.element('provider').handlers.change();
+  assert.equal(h.element('consent').checked, false);
+  assert.equal(h.element('start').disabled, true);
+  assert.match(h.element('consent-description').textContent, /Deepgram.*nube/);
+  h.element('consent').checked = true;
+  h.element('consent').handlers.change();
+  await h.element('start').handlers.click();
+  const grant = h.calls.find(call => call[0] === 'fetch' && call[1].endsWith('/live-token'));
+  assert.deepEqual(grant[2], {language: 'en-US', provider: 'deepgram', consent: true});
+  const socket = h.sockets[0];
+  socket.onopen();
+  assert.deepEqual(JSON.parse(socket.sent[0]), {
+    type: 'start', token: 'synthetic-token', provider: 'deepgram', language: 'en-US',
+  });
+  socket.onmessage({data: JSON.stringify({type: 'ready', provider: 'deepgram', language: 'en-US',
+    sample_rate: 16000, sample_format: 'pcm_s16le', channels: 1})});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(h.calls.includes('worklet'));
+  socket.onmessage({data: JSON.stringify({type: 'partial', text: 'Could you explain', language: 'en-US'})});
+  assert.equal(h.element('partial').textContent, 'Could you explain');
+  socket.onmessage({data: JSON.stringify({type: 'final', text: 'Could you explain authentication?', language: 'en-US'})});
+  assert.equal(h.element('partial').textContent, 'Escuchando…');
 });

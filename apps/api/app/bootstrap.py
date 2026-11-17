@@ -1,4 +1,4 @@
-"""Optional local generation and speech composition, without startup downloads."""
+"""Optional local/cloud speech and generation composition, without startup I/O."""
 from __future__ import annotations
 
 import math
@@ -9,12 +9,17 @@ from .application.generation import DEFAULT_TIMEOUT_SECONDS, GenerationError, Ge
 from .infrastructure.ollama import OllamaProvider
 from .application.stt import SpeechProvider
 from .infrastructure.faster_whisper import FasterWhisperProvider
+from .infrastructure.deepgram import DeepgramProvider
 
 
 def create_whisper_provider() -> SpeechProvider:
     """Compose optional local speech without loading, installing or downloading it."""
     return FasterWhisperProvider()
 
+
+def create_deepgram_provider() -> DeepgramProvider:
+    """Configure cloud STT only from the backend process environment."""
+    return DeepgramProvider()
 
 def create_generation_service(environ: Mapping[str, str] | None = None) -> GenerationService:
     """Build a local service only when explicitly enabled; perform no network I/O."""

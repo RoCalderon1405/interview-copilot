@@ -19,7 +19,7 @@ MAX_SEGMENT_BYTES = 8 * SAMPLE_RATE * 2
 
 
 class SpeechUnavailable(Exception):
-    """A local speech runtime or trusted model cannot be used."""
+    """A selected speech runtime or configured provider cannot be used."""
 
 
 class SpeechFailure(Exception):
@@ -66,7 +66,7 @@ class SpeechAvailability(TypedDict):
 
 
 class SpeechProvider(Protocol):
-    """Composition-selected local engine, never selected by a request path."""
+    """Composition-selected engine, never selected by an arbitrary request path."""
 
     def availability(self) -> SpeechAvailability: ...
     async def open(self, language: str) -> SpeechSession: ...
@@ -260,6 +260,85 @@ class TranscriptionPump:
         self.closed = True
         if self.segmenter:
             self.segmenter.clear()
+        self.task.cancel()
+        await asyncio.gather(self.task, return_exceptions=True)
+        while not self._queue.empty():
+            self._queue.get_nowait()
+        self.queued_bytes = 0
+        await self.session.close()
+
+
+class StreamingSpeechSession(SpeechSession, Protocol):
+    """Cloud recognition also yields transcript updates independently of PCM writes."""
+
+    async def receive(self) -> FeedResult: ...
+
+
+class StreamingTranscriptionPump:
+    """Bounded PCM sender plus independent result receiver for cloud streaming.
+
+    Results are emitted directly with no accumulating event queue. This keeps
+    interim results responsive while outbound PCM writes are in progress.
+    """
+
+    def __init__(self, session: StreamingSpeechSession, *,
+                 emit: Callable[[FeedResult, bool], Awaitable[None]]) -> None:
+        self.session = session
+        self._emit = emit
+        self._queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=20)
+        self.queued_bytes = 0
+        self.closed = False
+        self.stopping = False
+        self.task = asyncio.create_task(self._run())
+
+    def feed(self, pcm: bytes) -> None:
+        """Fail rather than silently dropping frames when the network slows."""
+        if self.closed or self.stopping:
+            raise SpeechFailure("closed")
+        if len(pcm) % 2 or len(pcm) > 64000:
+            raise SpeechFailure("invalid_pcm")
+        if not pcm:
+            return
+        if self._queue.full() or self.queued_bytes + len(pcm) > 64000:
+            raise SpeechOverloaded("pcm_backpressure")
+        self._queue.put_nowait(pcm)
+        self.queued_bytes += len(pcm)
+
+    async def _sender(self) -> None:
+        while True:
+            pcm = await self._queue.get()
+            self.queued_bytes -= len(pcm)
+            await self.session.feed(pcm)
+
+    async def _receiver(self) -> None:
+        while True:
+            result = await self.session.receive()
+            if self.closed:
+                return
+            if result.partial or result.final:
+                await self._emit(result, self.stopping)
+
+    async def _run(self) -> None:
+        sender = asyncio.create_task(self._sender())
+        receiver = asyncio.create_task(self._receiver())
+        try:
+            done, _ = await asyncio.wait({sender, receiver}, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                await task
+            if not self.closed:
+                raise SpeechFailure("deepgram_stream_ended")
+        finally:
+            for task in (sender, receiver):
+                task.cancel()
+            await asyncio.gather(sender, receiver, return_exceptions=True)
+
+    async def finish(self) -> None:
+        """Stop cloud capture without treating unfinalized text as a question."""
+        await self.close()
+
+    async def close(self) -> None:
+        """Cancel both directions before closing the upstream connection."""
+        self.closed = self.stopping = True
         self.task.cancel()
         await asyncio.gather(self.task, return_exceptions=True)
         while not self._queue.empty():

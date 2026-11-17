@@ -4,26 +4,26 @@
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src http://127.0.0.1:8765 ws://127.0.0.1:8765 ws://127.0.0.1:5173; object-src 'none'; frame-src 'none'; base-uri 'none'">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Windows Audio → STT local → Preguntas → Respuestas</title>
+  <title>Windows Audio → STT → Preguntas → Respuestas</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <main>
-    <h1>Audio → STT local → Preguntas → Respuestas</h1>
-    <p>Escucha el audio de salida de Windows y envía PCM únicamente al backend local (127.0.0.1:8765). No guarda grabaciones.</p>
+    <h1>Audio → STT → Preguntas → Respuestas</h1>
+    <p>Escucha el audio de salida de Windows y envía PCM al backend local (127.0.0.1:8765). Con Deepgram, el backend transmite audio a la nube y puede haber cargos. No guardamos grabaciones localmente.</p>
     <label for="provider">Motor de transcripción
-      <select id="provider"><option value="vosk" selected>Vosk (predeterminado)</option><option value="faster-whisper">Faster-Whisper Small (CPU INT8)</option></select>
+      <select id="provider"><option value="vosk" selected>Vosk (predeterminado)</option><option value="faster-whisper">Faster-Whisper Small (CPU INT8)</option><option value="deepgram">Deepgram Nova-3 (nube, de pago)</option></select>
     </label>
-    <p id="speech-status" class="muted" role="status">Consultando motores locales…</p>
+    <p id="speech-status" class="muted" role="status">Consultando motores…</p>
     <label for="language">Idioma
       <select id="language"><option value="en-US">English</option><option value="es-MX">Español</option></select>
     </label>
-    <label><input type="checkbox" id="consent"> Autorizo capturar todo el audio de salida de Windows y procesarlo con el motor local seleccionado.</label>
+    <label><input type="checkbox" id="consent"> <span id="consent-description">Autorizo capturar todo el audio de salida de Windows y procesarlo localmente.</span></label>
     <div class="controls"><button id="start" disabled>Iniciar transcripción</button><button id="stop" disabled>Detener</button></div>
     <p id="status" role="status">Esperando consentimiento.</p>
     <div class="meter"><div id="level"></div></div>
     <p id="info">Pista: ninguna · PCM enviado: 0 tramas</p>
-    <p id="speech-latency" class="muted">Latencia EOS estimada: pendiente (Faster-Whisper).</p>
+    <p id="speech-latency" class="muted">Latencia EOS estimada: pendiente.</p>
     <p id="semantic-status" class="muted">Búsqueda semántica: consultando índice local…</p>
     <section aria-label="Preguntas detectadas"><h2>Preguntas y respuestas documentadas</h2><p id="question-hint" class="muted">Esperando una pregunta completa…</p><ul id="questions" aria-live="polite"></ul><p class="muted">Detección heurística: algunas preguntas podrían no reconocerse. Las respuestas exactas provienen del documento, no de una certificación de hechos. Las coincidencias semánticas son posibles respuestas por revisar. El fallback Ollama opcional se muestra por separado en la ventana principal.</p></section>
     <section aria-label="Transcripción"><h2>Transcripción</h2><p id="partial" class="muted">Escuchando…</p><div id="finals" aria-live="polite"></div></section>

@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from .application.generation import GenerationError, GenerationService
-from .bootstrap import create_generation_service, create_whisper_provider
+from .bootstrap import create_deepgram_provider, create_generation_service, create_whisper_provider
 from .live import LiveRuntime, router as live_router
 from .parsers import SUPPORTED_EXTENSIONS, parse_file
 from .retrieval import assess_answer, suggest, build_session_report
@@ -70,7 +70,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     store = KnowledgeStore(data_dir or default_data_dir())
     application.state.store = store
     application.state.semantic = SemanticIndex(store)
-    application.state.live = LiveRuntime(whisper=create_whisper_provider())
+    application.state.live = LiveRuntime(whisper=create_whisper_provider(), deepgram=create_deepgram_provider())
     try:
         application.state.generation = create_generation_service()
     except GenerationError:

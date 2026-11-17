@@ -2,6 +2,21 @@
 
 Live Mode is the primary product. The integrated flow below is implemented for Windows development, but complete acceptance is pending. The owner validated audio, PCM, Vosk English, question detection and exact/semantic retrieval in the isolated lab, not the full main-window integration. See [current acceptance status](live-mode.md).
 
+<!-- STT-001B architecture addition, 2026-11-16 -->
+## Deepgram Nova-3 streaming extension (STT-001B)
+
+The selectable Deepgram provider is an **optional cloud infrastructure adapter** behind the application-owned STT contracts. The capture window still sends PCM16 mono/16 kHz to the authorized FastAPI WebSocket on loopback. Only FastAPI opens a TLS WebSocket to Deepgram; React/Electron do not receive an API Key or contact Deepgram directly. The local defaults and Vosk/Faster-Whisper adapters remain available. A selected provider is bound to the single-use Live grant; no automatic switching or fallback is permitted.
+
+Deepgram interim transcripts (`is_final=false`) are emitted as **replaceable partial UI text**. Segment finals (`is_final=true`) must be accumulated; a completed utterance (`speech_final=true`) is the boundary for question extraction, RAG and optional LLM generation. Neither an interim hypothesis nor a segment final alone authorizes an AI suggestion. Existing bounded PCM flow, send serialization, question deduplication, connection cancellation and stop/cleanup policies must be preserved.
+
+Deepgram currently obtains its key from `COPILOT_DEEPGRAM_API_KEY` in the backend process environment. Availability checks only establish local configuration, not remote authorization, billing status or Internet reachability. The user must separately select cloud STT and explicitly consent to off-device audio transmission. Provider-side processing and retention depend on Deepgram's own terms/settings; a project promise of no **local** audio recording is not a promise of no remote processing. Cloud use may incur costs.
+
+Windows English system-audio capture, interim/final transcripts and React relay have been observed by the owner; this does not yet validate end-to-end latency, Spanish, realistic conferencing, connectivity failure recovery or production packaging. See [Live Mode observations](live-mode.md) and [roadmap tasks](roadmap.md).
+
+### Planned provider, credential and metering boundaries (not implemented)
+
+Keep STT selection independent from LLM selection. Cloud providers require BYOK, explicit privacy consent and OS-backed secret storage on Windows when persistent settings are implemented. Introduce usage counters only with validated provider billing semantics, showing estimated session costs rather than claiming exact invoiced amounts. A local history may persist limited session metadata after explicit approval; raw audio and full Live transcripts remain nonpersistent by default. Do not add a universal provider framework, provider-specific billing database or extra cloud services before their respective tasks are approved.
+
 ## Current implementation
 
 ```text

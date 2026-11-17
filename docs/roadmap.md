@@ -6,7 +6,7 @@ Live Mode is the primary product. This order reflects the owner's priorities, no
 
 This file is the single lightweight task board; [Live Mode](live-mode.md) holds validation evidence and known limitations, not a second task list.
 
-**Current task: STT-001A**, Live integration **IMPLEMENTED / PENDING HUMAN WINDOWS ACCEPTANCE**: Vosk-default selector, authorized provider/language binding, bounded segmentation/reception, cancellable CPU Small INT8 worker and unchanged RAG/Ollama policies. 339 backend, 9 Electron, 5 capture-window, 2 PCM, 3 UI and 8 evaluation tests passed; build/lint passed. Paced synthetic ASGI/native-worker p95 was **2.817 s EN / 2.964 s ES**, not proof of real human/Windows end-to-end p95 ≤3 s; Spanish headroom is marginal. No CUDA/downloads/Deepgram or changes to the working `.venv`/database/index. See [implementation evidence and pending acceptance](live-mode.md#stt-001a--live-integration). **DET-001** and real Ollama/conferencing acceptance remain pending; AI-001C is not started.
+**Current validation focus: STT-001B** — Deepgram Nova-3 integration is **IMPLEMENTED / PARTIALLY VALIDATED ON WINDOWS (EN)**. The owner confirmed Electron system-audio capture, progressive English transcripts and final/question relay to React; no measured EOS or first-partial latency yet, and Spanish/network/stop-restart acceptance is pending. STT-001A remains implemented but not fully accepted; keep Vosk as default. **DET-002** (implicit interview requests vs ordinary instructions) is the next approved behavior task. All provider cost, credential and metering features are planned separately; see below.
 
 | ID | Description | Status | Commit reference |
 | --- | --- | --- | --- |
@@ -26,12 +26,36 @@ This file is the single lightweight task board; [Live Mode](live-mode.md) holds 
 | AI-001B | Automatic Live fallback integration after suitable documentary retrieval fails | Completed implementation; 303 backend tests, 9 Electron, 3 UI and 2 PCM tests passed; real Ollama/Windows acceptance pending | — |
 | AI-001C | Follow-up generation work | Pending scope definition and owner approval; no implementation authorized | — |
 | STT-001A | Selectable local Vosk/Faster-Whisper Live STT, EN/ES | Implemented; automated/native synthetic replay validated; human EN/ES Windows accuracy, real p95 ≤3 s and contention acceptance pending; GPU excluded | `febae20` (initial gate), `2f7545f` (CPU evaluation); integration commit in history |
-| STT-001B | Deepgram Nova-3 STT | Approved future task; not started, excluded from STT-001A | — |
-| DET-002 | Further contextual detection beyond DET-001; scope requires approval | Deferred | — |
+| STT-001B | Optional Deepgram Nova-3 streaming with cloud consent and EN/ES selection | Implemented in feature branch; owner validated English partial/final + React relay, Spanish and timing/lifecycle tests pending | Pending commit |
+| DET-002 | Distinguish implicit interview requests from operational instructions and ordinary speech, EN/ES | Approved next behavior task; not yet implemented | — |
+| UI-001 | Label selected cloud/local STT accurately and clearly render interim/final | Pending | — |
+| MET-001 | Measure live first-partial, EOS-to-final and final-to-suggestion latency (p50/p95) | Pending | — |
+| CLOUD-001 | Windows-secured persistent BYOK configuration and consent/privacy UX | Planned; current Deepgram key is environment-only | — |
+| COST-001 | Pre-session cost estimate and post-session provider usage/cost estimate | Planned; no billing telemetry yet | — |
+| HIST-001 | Privacy-limited local session usage/cost history with retention controls | Planned; no transcript/audio persistence | — |
+| AI-002 | Optional OpenAI cloud LLM provider, independent of STT, with BYOK | Planned; not implemented | — |
+| STT-001C | Evaluate optional AssemblyAI cloud streaming after current acceptance | Future evaluation; not implemented | — |
 
 **Status meaning:** Completed applies to the stated deliverable (analysis/research is not implementation); implemented means code exists, not that Windows acceptance passed. Partially validated records only confirmed cases. Pending work is not started/accepted; deferred work is not current scope. A commit alone does not close a task. `—` means no dedicated reference recorded; this update's commit is available in Git history.
 
 **Maintenance:** each approved task must update its row when completed, including available commit references and validation limits. Record partial progress without upgrading it to full validation; keep the current-task indicator accurate. Do not create another board or copy conversation history into documentation.
+
+<!-- STT-001B roadmap decisions, 2026-11-16 -->
+## STT-001B results and agreed product direction
+
+**Observed on Windows (2026-11-16):** Deepgram Nova-3 returned partial and final English transcripts in the Electron capture window and relayed finals/questions to React. The owner observed a small but unmeasured delay. The detector incorrectly treated some spoken test instructions as interview questions. This is **partial acceptance**, not a latency SLA or validated production release. Spanish, interruptions, restart, network failure and end-to-end latency remain unverified. A `no_evidence` documentary response is not an STT failure.
+
+The following decisions are approved **as product direction**, not permission to implement all tasks at once:
+
+- **Question intent (DET-002, next behavior task):** detect both explicit questions and implicit interview requests such as "Tell me about your experience with React", "Walk me through your architecture" and "Explain dependency injection" even without a question mark. Avoid treating operational instructions to the assistant, quoted examples, incomplete phrases or ordinary statements as questions. Test real EN/ES examples, false positives, false negatives, deduplication and abstention. Do not prompt Ollama until an utterance is complete; do not make a large new agent framework.
+- **Independent provider selection:** STT: Vosk (local default), Faster-Whisper (optional local), Deepgram Nova-3 (optional cloud); evaluate AssemblyAI later, not as a new automatic fallback. LLM: existing local Ollama and a separately approved future OpenAI API adapter. Never conflate the STT choice with the LLM choice or silently switch cloud providers.
+- **BYOK/security (CLOUD-001):** each user configures their own provider account and API Key. Deepgram currently reads an environment variable only; a future explicit settings feature should protect persistent secrets with Windows OS facilities (for example, Credential Manager/DPAPI), never renderer state, plaintext SQLite, logs, Git or bundled installers. Obtain provider-specific informed audio consent before sending it off-device; disabling cloud must preserve local mode.
+- **Cost estimates and usage (COST-001):** before a paid session, display a price estimate based on the selected STT/LLM provider, model and planned duration, with clear assumptions and current rates. After the session, show measured STT usage (including provider-billable time when obtainable), actual reported LLM token usage when available and **estimated** monetary cost; avoid claiming access to the provider's invoice. Local API charges are zero, not necessarily zero hardware/electricity cost. Prices and free credits vary and must not be hardcoded as permanent facts.
+- **Local session history (HIST-001):** opt-in/approved persistence of session metadata, provider/model, durations, usage estimates and costs. Keep audio and full Live transcripts out of persistent history by default. Define deletion, retention and privacy before implementing.
+- **Real-time UX (UI-001/MET-001):** show the actual selected STT provider (not "STT local" for cloud); distinguish partial and final text. Measure time-to-first-partial, end-of-speech-to-final and final-to-suggestion separately, plus p50/p95 in repeatable real Windows tests. Optimize only after measurements.
+- **Validation and release:** run EN/ES human speech, realistic Teams/Meet/Zoom system audio, network disconnect/stop/restart, Vosk and Whisper regressions, API/browser security and main-window behavior before closing STT-001B. The app is Windows development-mode only; screen-capture exclusion is best-effort and still unverified in meetings.
+
+The existing exact Q&A > optional semantic candidate > explicit no-documentary-evidence policy stays unchanged. Local Ollama suggestions are separate, clearly marked unverified and opt-in. Future cloud LLM output must follow the same provenance rules. `AGENTS.md` remains short and limited to permanent engineering rules.
 
 ## Established baseline
 
@@ -41,7 +65,7 @@ This file is the single lightweight task board; [Live Mode](live-mode.md) holds 
 
 ## Ordered priorities
 
-1. **Current:** perform STT-001A human EN/ES Windows acceptance and measure actual end-of-speech-to-main-window p95 ≤3 s, including accuracy, CPU contention and stop/restart. Integration is implemented, not fully accepted; retain Vosk as default and explicit alternative. No CUDA, automatic cloud fallback or Deepgram implementation. Use the existing backend, database and cache without reindexing; validate source-backed results and abstention separately by language/provider.
+1. **Current:** finish STT-001B EN/ES human Windows acceptance and repeatable latency/stop/restart/network tests, then address DET-002 contextual question intent with negative and positive EN/ES examples. Preserve Vosk as default and Faster-Whisper as an explicit local alternative; keep all provider changes opt-in. Restore Faster-Whisper runtime variables before comparing it; no CUDA or automatic cloud fallback. Do not reindex the document database solely for STT testing.
 2. Review task-level architecture decisions within the approved pragmatic Clean Architecture direction; then refactor incrementally with clear React/Electron feature boundaries. Preserve APIs, retrieval policy, permissions and validated capture. The refactor is not completed.
 3. Windows backend startup is available through [`dev-api.bat`](../dev-api.bat) (DEV-001, verified in CMD); it uses the existing venv and does not install packages or create environments.
 4. AI-001A/B provide opt-in automatic local fallback only after final no-evidence, using question/language and fixed instructions without execution capabilities. Validate an approved existing local model on Windows for EN/ES quality, cold/warm latency, audio continuity, replacement and teardown before claiming real-provider acceptance. Documentary priority, default-disabled behavior and manual/Practice policies remain intact. AI-001C has no approved scope and is not started.

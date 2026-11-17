@@ -1,0 +1,3 @@
+# Optional Deepgram Nova-3 WebSocket streaming runtime.
+-r requirements.txt
+websockets>=16,<18

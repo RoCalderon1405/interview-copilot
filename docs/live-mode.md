@@ -1,5 +1,12 @@
 # Live Mode integration — Windows acceptance test
 
+<!-- STT-001B real Windows observation, 2026-11-16 -->
+## STT-001B — initial Deepgram Windows observation (2026-11-16)
+
+**PARTIALLY VALIDATED by the owner:** `/live/status` returned `providers.deepgram.available=true`, while Vosk was available and Faster-Whisper was unavailable because its separate runtime/model environment variables were absent at that startup. The actual Electron capture window connected to Deepgram Nova-3 in English; the owner observed progressively appearing text with a small, unmeasured delay, correctly transcribed several spoken English interview questions and confirmed results in the React main window. Some spoken instructions (e.g. "Tell me if text appears before you're finished speaking") were incorrectly classified as questions. This motivates DET-002, not a claim that cloud STT failed.
+
+**NOT YET VALIDATED:** end-of-speech timing and time to first partial, p50/p95 over repeatable sessions, English question precision/recall, Spanish human audio, provider stop/restart and failure cases, original Vosk/Faster-Whisper regression, cloud costs/metering, actual conference behavior and packaged production use. The UI still contained the inaccurate cloud label "STT local · Live". No complete Windows acceptance is claimed. Further work is tracked exclusively in the [roadmap](roadmap.md), not a separate task list here.
+
 ## Current status
 
 Live Mode is the primary product. The integration is **IMPLEMENTED / PARTIALLY VALIDATED**: complete acceptance in the main React window has not been confirmed. Task status is maintained only in the [official roadmap board](roadmap.md#official-task-board).

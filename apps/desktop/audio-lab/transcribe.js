@@ -1,8 +1,9 @@
-/** Consent-driven Windows → PCM16 → authorized local STT session. */
+/** Consent-driven Windows → PCM16 → backend-mediated local/cloud STT. */
 'use strict';
 const API = 'http://127.0.0.1:8765';
 const SOCKET = 'ws://127.0.0.1:8765/live/transcribe';
 const consent = document.getElementById('consent');
+const consentDescription = document.getElementById('consent-description');
 const start = document.getElementById('start');
 const stop = document.getElementById('stop');
 const language = document.getElementById('language');
@@ -22,7 +23,16 @@ let silentOutput = null, worklet = null, socket = null, frame = null;
 let busy = false, stopping = false, pcmFrames = 0, stopTimeout = null;
 let lastPublishedMetric = 0;
 let captureRevision = 0;
-function engineLabel() { return provider.value === 'faster-whisper' ? 'Faster-Whisper' : 'Vosk'; }
+function engineLabel() {
+  return provider.value === 'faster-whisper' ? 'Faster-Whisper' : provider.value === 'deepgram' ? 'Deepgram Nova-3' : 'Vosk';
+}
+function isCloud() { return provider.value === 'deepgram'; }
+function updateConsent() {
+  consentDescription.textContent = isCloud()
+    ? 'Autorizo capturar todo el audio de salida de Windows y enviarlo mediante el backend a Deepgram (nube, con posibles cargos y tratamiento conforme a la política del proveedor).'
+    : 'Autorizo capturar todo el audio de salida de Windows y procesarlo localmente.';
+}
+updateConsent();
 function publish(packet) {
   // No bridge in the standalone lab: the original validated path stays independent.
   window.copilotCapture?.publish(packet);
@@ -54,13 +64,19 @@ async function updateSpeechStatus() {
     const data = await response.json();
     const selected = data.providers?.[provider.value] ?? (provider.value === 'vosk' ? data : null);
     speechStatus.textContent = selected?.languages?.[language.value]?.available
-      ? `${engineLabel()} disponible. ${provider.value === 'faster-whisper' ? 'Solo resultados finales; detener cancela segmentos pendientes.' : 'Transcripción parcial y final.'}`
-      : `${engineLabel()} no disponible para este idioma. Revisa la configuración local; no se descargan modelos ni se cambia de motor automáticamente.`;
+      ? `${engineLabel()} disponible. ${provider.value === 'faster-whisper' ? 'Solo resultados finales; detener cancela segmentos pendientes.' : 'Transcripción parcial y final.'}${isCloud() ? ' El backend enviará audio a Deepgram y puede generar cargos.' : ''}`
+      : `${engineLabel()} no disponible para este idioma. ${isCloud() ? 'Configura COPILOT_DEEPGRAM_API_KEY y websockets en el backend.' : 'Revisa el runtime o modelo local.'} No hay fallback automático.`;
   } catch {
-    speechStatus.textContent = 'No se pudo consultar el motor local. Verifica el backend antes de iniciar.';
+    speechStatus.textContent = 'No se pudo consultar el motor. Verifica el backend antes de iniciar.';
   }
 }
-provider.addEventListener('change', () => { void updateSpeechStatus(); });
+provider.addEventListener('change', () => {
+  // Explicit cloud consent cannot be inherited from an earlier local selection.
+  consent.checked = false;
+  start.disabled = true;
+  updateConsent();
+  void updateSpeechStatus();
+});
 language.addEventListener('change', () => { void updateSpeechStatus(); });
 void updateSpeechStatus();
 
@@ -162,7 +178,7 @@ start.addEventListener('click', async () => {
   questions.replaceChildren();
   questionHint.textContent = 'Esperando una pregunta completa…';
   pcmFrames = 0;
-  speechLatency.textContent = 'Latencia EOS estimada: pendiente (Faster-Whisper).';
+  speechLatency.textContent = 'Latencia EOS estimada: pendiente.';
   void updateSemanticStatus();
   setStatus('Solicitando audio del sistema…');
   try {
@@ -187,14 +203,14 @@ start.addEventListener('click', async () => {
     if (revision !== captureRevision || !busy || stopping) return;
     measure();
 
-    setStatus(`Comprobando ${engineLabel()} local…`);
+    setStatus(`Comprobando ${engineLabel()}…`);
     const response = await fetch(`${API}/live/status`, { cache: 'no-store', mode: 'cors' });
     if (!response.ok) throw new Error(`Estado de STT: HTTP ${response.status}`);
     const availability = await response.json();
     if (revision !== captureRevision || !busy || stopping) return;
     const selected = availability.providers?.[selectedProvider] ?? (selectedProvider === 'vosk' ? availability : null);
     if (!selected?.languages?.[selectedLanguage]?.available) {
-      throw new Error(`${engineLabel()} (${selectedLanguage}) no está disponible. Revisa el runtime y modelo local; no hay fallback automático.`);
+      throw new Error(`${engineLabel()} (${selectedLanguage}) no está disponible. Revisa la configuración del backend; no hay fallback automático.`);
     }
     const session = await postJson('/sessions', { mode: 'live' });
     if (revision !== captureRevision || !busy || stopping) return;
@@ -202,7 +218,7 @@ start.addEventListener('click', async () => {
       language: selectedLanguage, provider: selectedProvider, consent: true,
     });
     if (revision !== captureRevision || !busy || stopping) return;
-    setStatus(`Cargando ${engineLabel()} local…`);
+    setStatus(`Conectando con ${engineLabel()}…`);
     socket = new WebSocket(SOCKET);
     const connection = socket;
     socket.onopen = () => {
@@ -229,7 +245,7 @@ start.addEventListener('click', async () => {
         const latency = packet.end_of_speech_latency_ms;
         speechLatency.textContent = typeof latency === 'number' && Number.isFinite(latency) && latency >= 0 && latency <= 120000
           ? `EOS a resultado STT (estimado en backend): ${(latency / 1000).toFixed(2)} s. No incluye captura/IPC.`
-          : 'Sin medida EOS (Vosk o corte por límite).';
+          : 'Sin medida EOS (Vosk, Deepgram o corte por límite).';
         const text = document.createElement('p');
         text.textContent = packet.text;
         finals.appendChild(text);
@@ -281,7 +297,7 @@ start.addEventListener('click', async () => {
         void fail(new Error(`${packet.code}: ${packet.message}`));
       }
     };
-    socket.onerror = () => { if (revision === captureRevision && !stopping) void fail(new Error('Falló la conexión WebSocket con STT local')); };
+    socket.onerror = () => { if (revision === captureRevision && !stopping) void fail(new Error('Falló la conexión WebSocket con STT')); };
     socket.onclose = event => {
       if (revision !== captureRevision) return;
       if (stopping) { void cleanup().then(done => { if (done === captureRevision) setStatus('Captura y STT detenidos.'); }); }
@@ -293,7 +309,7 @@ start.addEventListener('click', async () => {
 stop.addEventListener('click', () => {
   if (!busy || stopping) return;
   stopping = true;
-  setStatus(provider.value === 'vosk' ? 'Deteniendo; esperando último resultado de Vosk…' : 'Deteniendo y cancelando segmentos pendientes…');
+  setStatus(provider.value === 'vosk' ? 'Deteniendo; esperando último resultado de Vosk…' : 'Deteniendo y cancelando transcripción pendiente…');
   stream?.getTracks().forEach(track => track.stop());
   try { source?.disconnect(worklet); } catch { /* node not connected */ }
   if (socket?.readyState === WebSocket.OPEN) {

@@ -223,12 +223,19 @@ def token(client, language="en-US", provider="faster-whisper"):
 def test_provider_status_defaults_and_unavailable_or_unsupported_selection(tmp_path):
     app = create_app(tmp_path)
     app.state.live.whisper = FakeWhisper(available=False)
+    # Avoid relying on optional locally installed Vosk models for API selection.
+    class AvailableVosk:
+        def availability(self):
+            return {"provider": "vosk", "available": True, "runtime_installed": True,
+                    "languages": {"en-US": {"available": True}, "es-MX": {"available": True}},
+                    "detail": "Synthetic Vosk"}
+    app.state.live.models = AvailableVosk()
     with TestClient(app) as client:
         status = client.get("/live/status").json()
         assert status["provider"] == status["default_provider"] == "vosk"
-        assert set(status["providers"]) == {"vosk", "faster-whisper"}
+        assert set(status["providers"]) == {"vosk", "faster-whisper", "deepgram"}
         sid = client.post("/sessions", json={"mode": "live"}).json()["id"]
-        for provider, expected in (("deepgram", 422), ("faster-whisper", 503)):
+        for provider, expected in (("deepgram", 503), ("faster-whisper", 503), ("invalid", 422)):
             response = client.post(f"/sessions/{sid}/live-token",
                                    json={"language": "en-US", "provider": provider, "consent": True})
             assert response.status_code == expected
