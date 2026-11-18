@@ -11,6 +11,7 @@
   <main>
     <h1>Audio → STT → Preguntas → Respuestas</h1>
     <p>Escucha el audio de salida de Windows y envía PCM al backend local (127.0.0.1:8765). Con Deepgram, el backend transmite audio a la nube y puede haber cargos. No guardamos grabaciones localmente.</p>
+    <p class="muted">Esta ventana de audio no solicita exclusión de pantalla y puede aparecer al compartir. La protección de la ventana principal es de mejor esfuerzo, no una garantía de invisibilidad.</p>
     <label for="provider">Motor de transcripción
       <select id="provider"><option value="vosk" selected>Vosk (predeterminado)</option><option value="faster-whisper">Faster-Whisper Small (CPU INT8)</option><option value="deepgram">Deepgram Nova-3 (nube, de pago)</option></select>
     </label>

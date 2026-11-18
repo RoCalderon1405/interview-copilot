@@ -194,6 +194,36 @@ def test_generation_failure_keeps_audio_alive(tmp_path, failure, caplog):
     assert 'Explain caching' not in caplog.text
 
 
+def test_content_rejection_keeps_no_evidence_audio_and_teardown_without_retry(
+        tmp_path, caplog):
+    # EN/ES lexical variants belong to unit tests; this case protects the Live path.
+    language, question = 'es-MX', 'Explica la caché?'
+    answer = 'Dirigí un equipo y aumenté los ingresos un 30%.'
+
+    class UnsafeProvider(Provider):
+        async def generate(self, question, language):
+            await super().generate(question, language)
+            return answer
+
+    app = create_app(tmp_path)
+    provider = UnsafeProvider()
+    app.state.generation = GenerationService(provider, enabled=True)
+    app.state.live.models = Models(FeedResult(final=question))
+    with TestClient(app) as client:
+        _, token = session(client, language)
+        with start(client, token) as ws:
+            ws.send_json({'type': 'start', 'token': token})
+            assert ws.receive_json()['type'] == 'ready'
+            assert receive_final(ws)['status'] == 'no_evidence'
+            assert provider.started.wait(2)
+            ws.send_bytes(b'\0\0')
+            assert ws.receive_json()['type'] == 'partial'
+            stop(ws)  # Fails on any generated event, including a late replacement.
+    assert len(provider.calls) == 1
+    assert app.state.live.generations == {}
+    assert answer not in caplog.text
+
+
 def test_partials_never_generate_even_when_repeated(tmp_path):
     app = create_app(tmp_path)
     provider = Provider()

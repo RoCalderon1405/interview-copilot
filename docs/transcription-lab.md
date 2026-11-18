@@ -76,7 +76,7 @@ Use the same `npm run lab:transcribe` command. Speak a question and allow Vosk t
 4. With only the synthetic sample as the relevant knowledge, speak an unrelated question absent from it. Expect **“Sin respuesta suficientemente relacionada en tus documentos”**, with no invented answer. With an existing larger database, choose a question known to lack evidence; absence from this sample alone proves nothing about other documents or semantic candidates.
 5. Stop the capture, then start again and verify the interface is reset.
 
-Exact matching is normalized and takes priority; it returns stored wording and sources, not a factual certification. Paraphrases may produce a labeled semantic candidate if indexed and sufficiently distinct; otherwise no answer. Do not change the retrieval policy just to make an acceptance example pass. Preserve private documents locally. Importing a supported format does not guarantee extracted Q&A; see [format limitations](../README.md#documents-and-retrieval).
+Exact matching is normalized and takes priority; it returns stored wording and sources, not a factual certification. Paraphrases may produce a labeled semantic candidate if indexed and sufficiently distinct; otherwise no answer. Do not change the retrieval policy just to make an acceptance example pass. Preserve private documents locally. Importing a supported format does not guarantee extracted Q&A; see [format limitations](setup.md#documents-and-retrieval).
 
 ## Fifth acceptance test — first-utterance question reliability
 
@@ -87,7 +87,7 @@ With the known Q&A available, play **one** spoken "What is authentication?" foll
 
 ## Semantic Q&A lab (optional, owner-validated in isolation)
 
-The owner confirmed local semantic retrieval with 204 indexed questions in the lab, not complete main-window acceptance or general retrieval accuracy. See [README semantic setup](../README.md#optional-local-semantic-setup) for explicit indexing and separately authorized download steps; skip them when the existing cache/index works.
+The owner confirmed local semantic retrieval with 204 indexed questions in the lab, not complete main-window acceptance or general retrieval accuracy. See [semantic setup](setup.md#optional-local-semantic-setup) for explicit indexing and separately authorized download steps; skip them when the existing cache/index works.
 A `semantic_qa` message is displayed as **a possible answer requiring review**;
 `exact_qa` retains its exact-match label and priority. Without an exact match,
 unindexed or ambiguous candidates may leave no sufficient source answer.

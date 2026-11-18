@@ -1,37 +1,46 @@
-# Interview Copilot — Development rules
+# Interview Copilot — Agent development rules
 
-## Product and decision authority
-- Live Mode is the primary product; expanded Practice Mode is a future enhancement. Preserve the existing basic Practice workflow without expanding it implicitly.
-- The project owner decides product behavior and major architecture. Ask focused questions about ambiguous requirements; present recommendations and trade-offs before unapproved changes.
-- Do not replace technologies, change retrieval/document semantics or permissions, delete working modules/user data, or expand scope without approval.
-- Use built-in Plan and Build modes. No custom agents, additional skills, dependencies, model downloads or services without owner approval. No project generators, Docker or vector DB services for the current scope.
+## Scope and authority
+- **Live Mode** is the primary product; preserve basic Practice Mode unless expansion is approved.
+- The owner controls product behavior, architecture, dependencies and scope. Explain trade-offs before material changes. Routine decisions inside an approved task need no repeated permission.
+- Inspect Git branch and working tree first. Never overwrite unrelated work, delete user data, or stage, commit or push without authorization.
+- No new dependencies, services, models/downloads, custom agents, generators, Docker or vector DB services without approval.
+
+## Communication
+- Explain findings, decisions and recommendations in Spanish unless the owner requests another language.
+- Use short sentences, active voice, precise language and consistent terminology. Explain one idea at a time; add examples when useful and preserve necessary technical terms.
+- Keep explanations as short as the task allows, without omitting important evidence, risks or limitations.
+- Apply these plain-language principles as inspiration from ASD-STE100; do not claim formal ASD-STE100 compliance.
 
 ## Engineering
-- Give each task one small, testable responsibility, explicit exclusions, acceptance criteria, relevant automated tests and required human validation.
-- Progressively adopt pragmatic backend Clean Architecture with inward dependencies; organize React/Electron by feature and responsibility. This is an approved direction, not a completed refactor or approval of every proposed abstraction.
-- Keep native/provider details in infrastructure behind application-owned contracts; wire concrete adapters at composition boundaries. Bound streaming queues and background lifetimes, and suppress stale results before releasing resources on teardown.
-- Keep code readable and strictly typed; use professional English docstrings for public Python APIs and meaningful contracts. Explain non-obvious decisions, not syntax. Avoid generic repositories and speculative wrappers.
-- Preserve validated `audio-lab/transcribe.js`, PCM processing and Vosk/semantic behavior unless concrete evidence justifies a change. Preserve existing API contracts during migration.
-- Prefer small, coherent Conventional Commits. Inspect Git state first; never overwrite or stage unrelated work. Do not commit or push without authorization.
+- Work in small, testable tasks with explicit scope, exclusions, acceptance criteria, automated checks and human validation.
+- Progressively apply pragmatic backend Clean Architecture and feature-oriented React/Electron organization. Prefer a few concrete ports and cohesive modules over speculative abstractions, generic repositories or unnecessary frameworks.
+- Keep external APIs, STT/audio processing, retrieval behavior and document semantics stable unless specifically approved. Native/provider concerns belong in infrastructure; compose adapters at boundaries.
+- Use strict typing, readable code, professional English docstrings for public Python APIs, and comments explaining non-obvious decisions.
+- Bound streaming buffers and background lifetimes; cancel or suppress obsolete results on replacement, stop, disconnect or session finish, then release resources safely.
 
-## Security and retrieval boundaries
-- Audio capture requires explicit consent and a real click **inside the capture window**. It captures **all Windows output**, not one application.
-- Keep capture in a separate nonpersistent Electron session. The main Electron renderer remains sandboxed, denies media permissions and cannot call display capture.
-- Relay only validated, bounded text/status/suggestion/metric events through restricted IPC; never raw audio or credentials. Do not persist Live transcripts or log private content.
-- Exact Q&A takes priority and returns stored wording with source references, not a generated answer or factual certification. Semantic matches must be labeled **possible answers to review**. No sufficient documentary evidence means no documentary answer; explicitly enabled local generation stays separate, unverified and without documentary sources.
-- Document import does not guarantee Q&A extraction. Preserve the distinct manual-search and Live retrieval policies; see `docs/architecture.md`.
-- Screen-sharing exclusion is a core Live requirement, but `setContentProtection` is best-effort. Never claim guaranteed exclusion or undetectability; validate actual Windows conferencing sessions.
-- Integrated capture is Windows **development mode** only, via Vite. Packaged support requires separate authentication/origin and Windows acceptance work; do not relax CORS/WS origins to enable it.
-- FastEmbed remains local and opt-in. Keep secrets, documents, databases, embeddings, models and generated/cache files out of Git and distributable source ZIPs.
+## Test discipline
+- Keep tests minimal and meaningful. Each case must protect a distinct contract, boundary, risk or regression; remove duplicates without losing that protection.
+- Test observable behavior rather than object identity or incidental implementation details. Do not add tests merely to increase test counts or coverage percentages.
+- Prefer deterministic checks and existing evidence before real-model evaluations. Define an explicit evaluation budget, including warmups and failed attempts; do not repeat benchmarks for test-only or documentation changes.
+- Run focused checks first, then necessary regressions. Report removed redundancy, preserved protections and actual results; mocks do not establish real-model or Windows acceptance.
 
-## Evidence and current acceptance
-- Distinguish IMPLEMENTED (code inspected), VALIDATED (execution evidence), PENDING VALIDATION, PLANNED and UNKNOWN. Mock tests do not prove hardware, Windows or screen-sharing behavior.
-- The owner validated the isolated lab: Windows audio, PCM, Vosk English, question detection, source-backed exact Q&A and FastEmbed with 204 indexed questions.
-- Main Live integration still needs complete Windows acceptance; complete integrated Spanish validation and conferencing exclusion are not established.
-- Use `docs/live-mode.md` for the current acceptance procedure and status. Keep the working backend/database/models; do not reindex just to validate the integration. Report failing stage and message, not private transcripts.
-- Maintain existing docs rather than duplicate reports: README for setup, architecture for boundaries, Live docs for current validation, roadmap for priorities.
+## Security and product invariants
+- Windows system-audio capture includes **all Windows output**. Require informed consent and a real click **inside the isolated, nonpersistent capture window**. The main Electron renderer remains sandboxed without capture permissions.
+- Restrict IPC to validated, bounded events, never raw audio or credentials. Do not persist Live audio/transcripts or log private content. Keep cloud credentials server-side and out of repositories, renderer state and distributable archives.
+- Provider selection is explicit: Vosk stays the local default; optional local/cloud STT must not silently switch. Cloud STT requires separate informed audio consent.
+- Preserve Live retrieval order: normalized exact Q&A with source → optional semantic Q&A labeled for review → no documentary evidence. Opt-in AI suggestions remain separate, unverified and source-free. Do not implicitly change manual retrieval or indexing.
+- Screen-sharing exclusion is **best effort**, never proof of invisibility. Capture is Windows development-only with restricted origins; packaged support needs separate approval and acceptance.
+- Preserve working databases, documents, cached models and embeddings; never reinstall or reindex solely for validation.
 
-## Checks
-- `cd apps/api && python -m pytest -q`
-- `cd apps/desktop && npm run test:electron && npm run test:audio && npm run lint:electron && npm run build`
-- If `npm run build` is blocked by missing local native dependencies, state that limitation and require `npm install` on Windows, then rebuild.
+## Evidence and delivery
+- Distinguish **IMPLEMENTED**, **VALIDATED**, **PENDING VALIDATION**, **PLANNED** and **UNKNOWN**. Mocks are not evidence of Windows/audio/network/model or conferencing acceptance.
+- Run relevant tests. Complete regression commands:
+  - `cd apps/api && python -m pytest -q`
+  - `cd apps/desktop && npm run test:electron && npm run test:ui && npm run test:audio && npm run lint:electron && npm run build`
+- Do not install missing dependencies without approval; report blocked checks, especially native Windows builds.
+- Report changed files, rationale, tests/results, risks and outstanding real-Windows checks. Never claim acceptance without evidence or disclose private transcripts.
+
+## Documentation ownership
+- `README.md`: overview/setup; `docs/architecture.md`: boundaries and design; `docs/roadmap.md`: single task board; `docs/live-mode.md`: acceptance evidence; `docs/technical-vocabulary.md`: keyterm profiles.
+- Keep task status and historical test numbers out of this file; maintain them in their respective documents.

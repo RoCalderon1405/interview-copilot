@@ -81,7 +81,8 @@ test('capture runs only in an isolated session, and media requires main-frame us
  assert.equal(h.windows.length,2);
  const capture=h.windows[1];
  assert.equal(capture.options.webPreferences.partition,'live-capture');
- assert.equal(capture.options.webPreferences.sandbox,true);
+  assert.equal(capture.options.webPreferences.sandbox,true);
+  assert.equal(capture.protected,false); // Main-window protection is not inherited by the auxiliary window.
  assert.equal(capture.webContents.mainFrame.url,DEV+'/audio-lab/transcribe.html');
  assert.equal(h.window.webContents.check(),false);
  const media=capture.webContents.display;

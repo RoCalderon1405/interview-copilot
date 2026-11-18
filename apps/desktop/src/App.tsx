@@ -5,8 +5,8 @@ import {
   Send, Settings, Shield, Sparkles, Trash2, UploadCloud, WifiOff, X,
 } from 'lucide-react';
 import { api } from './api';
-import {LiveSuggestion, type LiveSuggestionEvent} from './features/live/LiveSuggestion';
-import type { AnswerResponse, DocumentRecord, Feedback, LiveEvent, PracticeQuestion, Session, SessionReport } from './types';
+import {LiveWorkspace} from './features/live/LiveWorkspace';
+import type { AnswerResponse, DocumentRecord, Feedback, PracticeQuestion, Session, SessionReport } from './types';
 
 type Page = 'overview' | 'knowledge' | 'practice' | 'live' | 'settings';
 const NAV: { id: Page; label: string; icon: typeof BookOpen }[] = [
@@ -50,11 +50,11 @@ export default function App() {
       <div className="topbar"><div className="breadcrumb">WORKSPACE <ChevronRight size={13}/> <strong>{NAV.find(n=>n.id===page)?.label}</strong></div><div className={`status ${connected ? 'online':'offline'}`}>{connected ? <Check size={14}/> : <WifiOff size={14}/>} {connected ? 'API connected' : 'API offline'}</div></div>
       {error && <div role="alert" className="alert error"><CircleHelp size={17}/>{error}<button onClick={()=>setError('')} aria-label="Cerrar"><X size={16}/></button></div>}
       {notice && <div role="status" className="alert success"><Check size={17}/>{notice}<button onClick={()=>setNotice('')} aria-label="Cerrar"><X size={16}/></button></div>}
-      <div className="content">
+      <div className={`content ${page === 'live' ? 'content-live' : ''}`}>
         {page === 'overview' && <Overview docs={documents} navigate={navigate}/>}
         {page === 'knowledge' && <Knowledge docs={documents} onUpload={onUpload} refresh={refresh} showError={showError} onNotice={setNotice}/>}
         {page === 'practice' && <Practice showError={showError}/>}
-        {page === 'live' && <Live showError={showError}/>}
+        {page === 'live' && <LiveWorkspace showError={showError}/>}
         {page === 'settings' && <SettingsPage />}
       </div>
     </main>
@@ -175,99 +175,6 @@ function Practice({showError}: {showError:(e:unknown)=>void}) {
       <div className="review-list">{report.questions.map((item,index)=><div className="review-item" key={index}><strong>{item.question}</strong><span>{item.coverage_score}% keyword coverage · {item.source.document_name} · {item.source.location}</span></div>)}</div>
       <div className="action-row"><button className="btn primary" onClick={()=>{setSession(null);setQuestion(null);setFeedback(null);setReport(null);}}>New practice session</button></div>
     </div>}
-  </>;
-}
-/** Live Mode receives read-only transcription and retrieval events from the isolated capture window. */
-function Live({showError}: {showError:(e:unknown)=>void}) {
-  const [question,setQuestion] = useState('');
-  const [answer,setAnswer] = useState<AnswerResponse|null>(null);
-  const [busy,setBusy] = useState(false);
-  const [captureOpen,setCaptureOpen] = useState(false);
-  const [events,setEvents] = useState<LiveEvent[]>([]);
-  const [partial,setPartial] = useState('');
-  const [frames,setFrames] = useState(0);
-  const [captureBusy,setCaptureBusy] = useState(false);
-
-  useEffect(() => {
-    const bridge = window.copilotDesktop;
-    if (!bridge) return;
-    let mounted = true;
-    const receive = (packet: LiveEvent) => {
-      if (!mounted) return;
-      if (packet.type === 'partial') {setPartial(packet.text); return;}
-      if (packet.type === 'metrics') {setFrames(packet.frames); return;}
-      if (packet.type === 'final') setPartial('');
-      if (packet.type === 'status' && packet.text === 'Captura detenida.') setCaptureOpen(false);
-      setEvents(prev => [...prev,packet].slice(-80));
-    };
-    const unsubscribe = bridge.onLiveEvent(receive);
-    void bridge.getLiveState().then(state => {
-      if (!mounted) return;
-      setCaptureOpen(state.open);
-      setEvents(state.events);
-    }).catch(showError);
-    return () => {mounted = false;unsubscribe();};
-  }, []);
-
-  const openCapture = async () => {
-    const bridge = window.copilotDesktop;
-    if (!bridge) return;
-    setCaptureBusy(true);
-    try {
-      const opened = await bridge.openLiveCapture();
-      if (!opened) throw new Error('La captura Live requiere ejecutar la aplicación con npm run dev.');
-      setCaptureOpen(true);
-    } catch(error) {showError(error);} finally {setCaptureBusy(false);}
-  };
-  const closeCapture = async () => {
-    const bridge = window.copilotDesktop;
-    if (!bridge) return;
-    setCaptureBusy(true);
-    try {await bridge.closeLiveCapture();setCaptureOpen(false);} catch(error) {showError(error);} finally {setCaptureBusy(false);}
-  };
-  const search = async () => {
-    if (question.trim().length < 3) return;
-    setBusy(true);
-    try {setAnswer(await api.answer(question.trim()));}
-    catch (error) {showError(error);}
-    finally {setBusy(false);}
-  };
-  const suggestions = events.filter((event): event is LiveSuggestionEvent => event.type === 'suggestion' || event.type === 'generated_suggestion').slice(-20).reverse();
-  const transcript = events.filter((event): event is Extract<LiveEvent,{type:'final'}> => event.type === 'final').slice(-20).reverse();
-  const mostRecentStatus = [...events].reverse().find(event => event.type === 'status' || event.type === 'error');
-  return <>
-    <div className="page-header"><div><div className="eyebrow">LIVE INTERVIEW · LOCAL</div><h1>Live Interview</h1>
-      <p className="page-description">Captura audio con consentimiento y prioriza documentos locales. Si Ollama está habilitado, puede sugerir respuestas de IA sin respaldo documental.</p>
-    </div><span className="page-icon"><Headphones size={22}/></span></div>
-    <div className="panel live-control-panel">
-      <div className="panel-title"><h2>Audio del sistema</h2><span className="hint">Electron → STT local → Q&A</span></div>
-      <p className="small-muted">La captura escucha toda la salida de audio de Windows. Se abrirá una ventana aislada para seleccionar idioma, autorizar e iniciar. Ninguna grabación se guarda.</p>
-      <div className="live-actions">
-        <button className="btn primary" disabled={captureBusy || !window.copilotDesktop} onClick={()=>void openCapture()}>
-          <Headphones size={17}/>{captureOpen ? 'Mostrar controles de audio' : 'Preparar captura Live'}
-        </button>
-        <button className="btn secondary" disabled={!captureOpen || captureBusy} onClick={()=>void closeCapture()}>Detener y cerrar captura</button>
-        <span className="live-frames">PCM: {frames} tramas</span>
-      </div>
-      <p className="small-muted" role="status">{mostRecentStatus?.type === 'status' || mostRecentStatus?.type === 'error' ? mostRecentStatus.text : 'La captura está detenida.'}</p>
-    </div>
-    <div className="live-results">
-      <section className="panel live-suggestions"><div className="panel-title"><h2>Preguntas y respuestas</h2><span className="hint">Documentos o sugerencias de IA identificadas</span></div>
-        {suggestions.length ? suggestions.map((item,index) => <LiveSuggestion item={item} key={`${item.type}-${item.question_id ?? item.question}-${index}`}/>) : <p className="small-muted">Las preguntas detectadas aparecerán aquí cuando se reciba audio.</p>}
-      </section>
-      <section className="panel live-transcript"><div className="panel-title"><h2>Transcripción</h2><span className="hint">STT local · Live</span></div>
-        {partial && <p className="live-partial">{partial}</p>}
-        {transcript.length ? transcript.map((item,index) => <p className="live-transcript-line" key={index}>{item.text}</p>) : <p className="small-muted">Esperando voz…</p>}
-      </section>
-    </div>
-    <div className="panel query-panel"><div className="panel-title"><h2>Consulta por texto</h2><span className="hint">Alternativa manual</span></div>
-      <label className="field-label" htmlFor="live-question">Pregunta</label>
-      <textarea id="live-question" rows={3} maxLength={3000} value={question}
-        onChange={event=>setQuestion(event.target.value)} placeholder="Escribe una pregunta..."/>
-      <div className="action-row"><button className="btn primary" disabled={busy||question.trim().length<3} onClick={()=>void search()}>
-        {busy?'Consultando...':'Consultar'} <Search size={16}/></button></div>
-      {answer && <AnswerCard answer={answer}/>}
-    </div>
   </>;
 }
 function SettingsPage() {

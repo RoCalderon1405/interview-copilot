@@ -13,6 +13,7 @@ from ..application.generation import (
     MAX_QUESTION_CHARS,
     GenerationError,
     GenerationLanguage,
+    few_shot_examples,
     system_instructions,
 )
 
@@ -48,12 +49,16 @@ class OllamaProvider:
         if (not isinstance(question, str) or len(question) > MAX_QUESTION_CHARS
                 or len(question.strip()) < 3):
             raise GenerationError("invalid_input")
+        messages = [{"role": "system", "content": system_instructions(language)}]
+        for example_question, example_answer in few_shot_examples(language):
+            messages.extend((
+                {"role": "user", "content": example_question},
+                {"role": "assistant", "content": example_answer},
+            ))
+        messages.append({"role": "user", "content": question})
         payload = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_instructions(language)},
-                {"role": "user", "content": question},
-            ],
+            "messages": messages,
             "stream": False,
             "think": False,
             "options": {"num_predict": MAX_OUTPUT_TOKENS, "temperature": 0.2},

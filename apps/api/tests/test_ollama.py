@@ -7,7 +7,7 @@ import json
 import httpx
 import pytest
 
-from app.application.generation import GenerationError, GenerationService, system_instructions
+from app.application.generation import GenerationError, GenerationService, few_shot_examples, system_instructions
 from app.infrastructure.ollama import MAX_RESPONSE_BYTES, OLLAMA_CHAT_URL, OllamaProvider
 
 
@@ -31,9 +31,12 @@ def test_payload_allowlist_and_untrusted_text_stays_in_user_role(language, monke
         calls.append(request)
         assert request.method == "POST" and str(request.url) == OLLAMA_CHAT_URL
         assert not {"authorization", "proxy-authorization", "cookie"} & set(request.headers)
+        examples = [message for question_text, answer in few_shot_examples(language) for message in (
+            {"role": "user", "content": question_text}, {"role": "assistant", "content": answer})]
         assert json.loads(request.content) == {
             "model": "local", "stream": False, "think": False,
             "messages": [{"role": "system", "content": system_instructions(language)},
+                         *examples,
                          {"role": "user", "content": question}],
             "options": {"num_predict": 256, "temperature": 0.2},
         }
@@ -44,6 +47,29 @@ def test_payload_allowlist_and_untrusted_text_stays_in_user_role(language, monke
     assert result.answer == "A practical answer."
     assert result.provider == "ollama" and result.model == "local" and result.source is None
     assert len(calls) == 1
+
+
+def test_each_call_has_only_fixed_examples_and_current_question():
+    calls = []
+
+    def handler(request):
+        calls.append(json.loads(request.content)["messages"])
+        return httpx.Response(200, json=valid_response())
+
+    provider = OllamaProvider("local", transport=httpx.MockTransport(handler))
+
+    async def run():
+        await provider.generate("PRIVATE PREVIOUS QUESTION?", "en-US")
+        await provider.generate("¿Qué es una cola de mensajes?", "es-MX")
+        await provider.generate("What is a message queue?", "en-US")
+
+    asyncio.run(run())
+    assert all(len(messages) == 8 for messages in calls)
+    assert [message["role"] for message in calls[0]] == [
+        "system", "user", "assistant", "user", "assistant", "user", "assistant", "user"]
+    assert "PRIVATE PREVIOUS" not in json.dumps(calls[1:])
+    assert calls[0][:-1] == calls[2][:-1]
+    assert calls[0][1:-1] != calls[1][1:-1]
 
 
 @pytest.mark.parametrize("model", ["", " ", "local model", "http://host/model", "../bad", "-bad",
