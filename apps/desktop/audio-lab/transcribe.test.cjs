@@ -6,10 +6,30 @@ const vm = require('node:vm');
 
 const script = fs.readFileSync(path.join(__dirname, 'transcribe.js'), 'utf8');
 
-function harness({selected = 'vosk', available = true, deferCapture = false} = {}) {
+test('compact capture keeps authorization and stop visible while diagnostics and duplicate feeds start collapsed', () => {
+  const html = fs.readFileSync(path.join(__dirname, 'transcribe.html'), 'utf8');
+  const disclosures = html.match(/<details\b[\s\S]*?<\/details>/g);
+  assert.equal(disclosures.length, 2);
+  assert.ok(disclosures.every(item => !/^<details[^>]*\bopen\b/.test(item)));
+  for (const id of ['info', 'speech-latency', 'semantic-status']) assert.ok(disclosures[0].includes(`id="${id}"`));
+  for (const id of ['questions', 'question-hint', 'partial', 'finals']) assert.ok(disclosures[1].includes(`id="${id}"`));
+  const essential = html.replace(/<details\b[\s\S]*?<\/details>/g, '');
+  for (const id of ['provider', 'language', 'vocabulary-profile', 'consent', 'consent-description', 'start', 'stop', 'status', 'speech-status']) {
+    assert.ok(essential.includes(`id="${id}"`), `${id} must not be inside a disclosure`);
+    assert.equal(html.split(`id="${id}"`).length - 1, 1);
+  }
+  assert.match(essential, /toda la salida de Windows/);
+  assert.match(essential, /Deepgram envía audio a la nube y puede generar cargos/);
+  assert.match(essential, /puede aparecer al compartir pantalla/);
+  assert.doesNotMatch(essential, /id="consent"[^>]*\bchecked\b/);
+});
+
+function harness({selected = 'vosk', available = true, deferCapture = false, bridge = false, deferWorklet = false} = {}) {
   const elements = new Map();
   const calls = [];
   const sockets = [];
+  const packets = [], worklets = [], contexts = [];
+  let now=1, resolveWorklet;
   let resolveCapture;
   function element(id) {
     if (!elements.has(id)) elements.set(id, {
@@ -23,8 +43,10 @@ function harness({selected = 'vosk', available = true, deferCapture = false} = {
   const track = {readyState: 'live', addEventListener() {}, stop() { calls.push('track.stop'); }};
   const node = {connect() {}, disconnect() {}};
   class Context {
+    constructor(){contexts.push(this);}
+    state = 'running';
     destination = {};
-    audioWorklet = {addModule: async () => { calls.push('worklet'); }};
+    audioWorklet = {addModule: () => { calls.push('worklet');return deferWorklet ? new Promise(resolve=>{resolveWorklet=resolve;}) : Promise.resolve(); }};
     createMediaStreamSource() { return node; }
     createAnalyser() { return {...node, fftSize: 4, getFloatTimeDomainData() {}}; }
     createGain() { return {...node, gain: {value: 0}}; }
@@ -46,8 +68,8 @@ function harness({selected = 'vosk', available = true, deferCapture = false} = {
     deepgram: {languages: {'en-US': {available}}},
   }};
   const context = {
-    document: {getElementById: element, createElement: () => element('created')},
-    window: {addEventListener() {}},
+    document: {getElementById: element, createElement: () => element('created'),createTextNode:text=>({textContent:text})},
+    window: {addEventListener() {}, ...(bridge ? {copilotCapture:{publish:packet=>packets.push(packet),hideControls:async()=>true}} : {})},
     navigator: {mediaDevices: {getDisplayMedia(options) {
       calls.push(['capture', options]);
       const captured = {getAudioTracks: () => [track], getTracks: () => [track]};
@@ -60,12 +82,12 @@ function harness({selected = 'vosk', available = true, deferCapture = false} = {
       return {ok: true, json: async () => payload};
     },
     AudioContext: Context, MediaStream: class {}, WebSocket: Socket,
-    AudioWorkletNode: class {port = {}; connect() {} disconnect() {}},
+    AudioWorkletNode: class {constructor(){worklets.push(this);}port = {}; connect() {} disconnect() {}},
     requestAnimationFrame: () => 1, cancelAnimationFrame() {},
-    setTimeout: () => 1, clearTimeout() {}, performance: {now: () => 1},
+    setTimeout: () => 1, clearTimeout() {}, performance: {now: () => now},
   };
   vm.runInNewContext(script, context);
-  return {element, calls, sockets, resolveCapture: () => resolveCapture()};
+  return {element, calls, sockets, packets, worklets, contexts, advance:ms=>{now+=ms;},resolveWorklet:()=>resolveWorklet(), resolveCapture: () => resolveCapture()};
 }
 
 test('Vosk remains the HTML default and capture stays directly in the click', async () => {
@@ -182,4 +204,55 @@ test('Vocabulary profile is visible only for Deepgram and cannot change mid-sess
   h.sockets[0].onclose({code: 1000});
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(h.element('vocabulary-profile').disabled, false);
+});
+
+test('capture readiness waits for the worklet; PCM heartbeat is independent of animation frames', async () => {
+  const h=harness({bridge:true,deferWorklet:true});
+  await h.element('start').handlers.click();
+  const phases=()=>h.packets.filter(p=>p.type==='capture_state').map(p=>p.phase);
+  assert.deepEqual(phases(),['connecting']);
+  h.sockets[0].onmessage({data:JSON.stringify({type:'ready',provider:'vosk',language:'en-US',sample_rate:16000,sample_format:'pcm_s16le',channels:1})});
+  assert.deepEqual(phases(),['connecting']);
+  h.resolveWorklet();await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(phases(),['connecting','active']);
+  assert.equal(h.element('hide-controls').disabled,false);
+  h.advance(1100);h.worklets[0].port.onmessage({data:new ArrayBuffer(3200)});
+  assert.equal(h.packets.find(p=>p.type==='metrics').frames,1);
+  h.contexts[0].state='suspended';h.contexts[0].onstatechange();
+  assert.equal(h.packets.at(-1).type,'capture_attention');
+  h.element('stop').handlers.click();
+  h.sockets[0].onclose({code:1000});await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(phases(),['connecting','active','stopping','stopped']);
+  const count=h.sockets[0].sent.length;
+  h.worklets[0].port.onmessage({data:new ArrayBuffer(3200)});
+  assert.equal(h.sockets[0].sent.length,count); // obsolete worklet cannot resume audio
+  const late=harness({bridge:true,deferWorklet:true});
+  await late.element('start').handlers.click();
+  late.sockets[0].onmessage({data:JSON.stringify({type:'ready',provider:'vosk',language:'en-US',sample_rate:16000,sample_format:'pcm_s16le',channels:1})});
+  late.element('stop').handlers.click();late.resolveWorklet();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(late.packets.some(p=>p.type==='capture_state' && p.phase==='active'),false);
+});
+
+test('capture localization updates authored copy without translating incoming content', async () => {
+  let changeLanguage;
+  const staticNode={textContent:'Idioma de transcripción',isConnected:true,parentElement:{tagName:'LABEL'}};
+  const status={dataset:{},textContent:''}, partial={dataset:{},textContent:''}, answer={dataset:{},textContent:'Fuente:'};
+  const nodes=[status,partial,answer];
+  const window={copilotCapture:{onUiLanguage:fn=>{changeLanguage=fn;return ()=>{};},getUiLanguage:async()=> 'es'},addEventListener(){}};
+  const document={body:{},documentElement:{},createTreeWalker:()=>({currentNode:staticNode,nextNode(){if(this.done)return false;this.done=true;return true;}}),
+    querySelectorAll:selector=>selector==='[data-ui-copy]'?nodes.filter(n=>n.dataset.uiCopy!==undefined):[]};
+  const context={window,document,NodeFilter:{SHOW_TEXT:4}};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../public/ui-language.js'),'utf8'),context);
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../public/audio-lab/capture-ui.js'),'utf8'),context);
+  await new Promise(resolve=>setImmediate(resolve));
+  window.copilotCaptureUi.set(status,'Conectando con Deepgram Nova-3…');
+  window.copilotCaptureUi.set(partial,'Esperando voz…');
+  window.copilotCaptureUi.content(partial,'Escuchando…'); // spoken text identical to a UI label
+  changeLanguage('en');
+  assert.equal(staticNode.textContent,'Transcription language');
+  assert.equal(status.textContent,'Connecting to Deepgram Nova-3…');
+  assert.equal(partial.textContent,'Escuchando…');assert.equal(answer.textContent,'Fuente:');
+  assert.equal(document.documentElement.lang,'en');
+  changeLanguage('es');assert.equal(status.textContent,'Conectando con Deepgram Nova-3…');
+  assert.equal(window.copilotUi.translate('en','FALLO: Windows no devolvió ninguna pista de audio'),'FAILURE: Windows did not return an audio track');
 });

@@ -6,7 +6,7 @@ Live Mode transcribes system audio, detects interview questions and retrieves an
 
 ## Features
 
-- **Live workspace:** newest-first transcripts, replaceable interim text, independently scrollable answers and clear session states.
+- **Live workspace:** answer-focused dark layout, newest-first transcripts, replaceable interim text and independently scrollable feeds. Compact capture controls keep diagnostics folded away.
 - **Document-backed answers:** exact Q&A first, optional semantic candidates for review, and explicit no-evidence results.
 - **Selectable STT:** Vosk by default; optional local Faster-Whisper or Deepgram Nova-3 cloud streaming. No automatic provider switching.
 - **Knowledge Base:** import XLSX, DOCX, PDF, TXT and Markdown; search manually and manage local documents.
@@ -49,10 +49,12 @@ The API runs at `http://127.0.0.1:8765` and the development UI at `http://127.0.
 ## Usage
 
 1. Import interview Q&A documents in **Knowledge Base**. Semantic indexing is optional and explicit.
-2. Open **Live Interview → Preparar captura**.
+2. Choose **EN/ES** with the **Interface language / Idioma de interfaz** selector. It switches immediately and saves only the interface preference; STT and LLM languages do not change. Spanish is the default. Open **Live Interview / Entrevista en vivo → Prepare capture / Preparar captura**.
 3. In the isolated audio window, select a provider/language, review consent and click **Iniciar transcripción**. Cloud STT requires separate consent.
 4. Review transcript and answer panels. Exact answers retain their sources; semantic and LLM suggestions require review. **Consulta manual** searches documents without invoking Ollama.
-5. Use **Mostrar controles** to return to the audio window or **Detener y cerrar** to stop and close it.
+5. Once capture is ready, the auxiliary window hides and both windows leave the Windows taskbar if a recovery tray icon can be created. The main workspace stays visible. Click the **Interview Copilot tray icon** (possibly in Windows' overflow area) to restore it after minimizing; its context menu also shows audio controls or stops/closes capture. **Mostrar controles / Show controls** reopens the same auxiliary window without restarting audio. **Detener y cerrar / Stop and close** restores normal taskbar behavior.
+
+If PCM stops advancing or the audio context stops running, controls and taskbar buttons are restored; automatic hiding stays disabled for that capture attempt. This is a recovery safeguard, not proof of healthy transcription. Hidden audio continuity, tray recovery and actual Windows/taskbar/conferencing behavior still require owner acceptance.
 
 Use **Practice Interview** for the existing question-and-keyword-feedback workflow. See the [Live acceptance guide](docs/live-mode.md) for detailed checks.
 

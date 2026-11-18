@@ -9,10 +9,13 @@ const { EventEmitter } = require('node:events');
 const { pathToFileURL } = require('node:url');
 const DEV = 'http://127.0.0.1:5173';
 const DIST = pathToFileURL(path.join(__dirname, '../dist/index.html')).href;
-function boot({packaged=false, platform='win32'}={}) {
+function boot({packaged=false, platform='win32', trayFails=false}={}) {
   const handles = new Map();
   const listeners = new Map();
   const windows=[];
+  const trays=[];
+  const timers=new Set();
+  let now=0;
   class Contents extends EventEmitter {
     constructor(){super();this.mainFrame={url:''};this.sent=[];this.session={setPermissionCheckHandler:fn=>{this.check=fn;},setPermissionRequestHandler:fn=>{this.request=fn;},setDisplayMediaRequestHandler:fn=>{this.display=fn;}};this.destroyed=false;}
     isDestroyed(){return this.destroyed;}
@@ -29,14 +32,25 @@ function boot({packaged=false, platform='win32'}={}) {
     setAlwaysOnTop(v){this.top=v;}
     isAlwaysOnTop(){return this.top;}
     isDestroyed(){return this.destroyed;}
-    show(){}
+    show(){this.visible=true;}
     focus(){}
-    close(){this.destroyed=true;this.emit('closed');}
+    showInactive(){this.visible=true;}
+    hide(){this.visible=false;}
+    isMinimized(){return Boolean(this.minimized);}
+    restore(){this.minimized=false;}
+    setSkipTaskbar(value){this.skipTaskbar=value;}
+    close(){this.emit('close');this.destroyed=true;this.emit('closed');}
     static getAllWindows(){return windows;}
   }
-  const electron={app:{isPackaged:packaged,whenReady:()=>Promise.resolve(),on(){},quit(){}},BrowserWindow:Window,desktopCapturer:{getSources:async()=>[{id:'screen:1:0'}]},ipcMain:{handle:(name,fn)=>handles.set(name,fn),on:(name,fn)=>listeners.set(name,fn)}};
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'main.cjs'),'utf8'),{__dirname,URL,process:{platform},require:id=>id==='electron'?electron:require(id)}, {filename:'main.cjs'});
-  return new Promise(resolve=>setImmediate(()=>resolve({handles,listeners,windows,window:windows[0]})));
+  class RecoveryTray extends EventEmitter {
+    constructor(){super();if(trayFails)throw new Error('tray unavailable');trays.push(this);}
+    setToolTip(value){this.tooltip=value;}
+    setContextMenu(value){this.menu=value;}
+    destroy(){this.destroyed=true;}
+  }
+  const electron={app:{isPackaged:packaged,whenReady:()=>Promise.resolve(),on(){},quit(){}},BrowserWindow:Window,Tray:RecoveryTray,Menu:{buildFromTemplate:items=>items},nativeImage:{createFromBitmap:()=>({isEmpty:()=>false})},desktopCapturer:{getSources:async()=>[{id:'screen:1:0'}]},ipcMain:{handle:(name,fn)=>handles.set(name,fn),on:(name,fn)=>listeners.set(name,fn)}};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'main.cjs'),'utf8'),{__dirname,URL,Buffer,Date:{now:()=>now},setInterval:fn=>{timers.add(fn);return {fn,unref(){}};},clearInterval:timer=>timers.delete(timer.fn),process:{platform},require:id=>id==='electron'?electron:require(id)}, {filename:'main.cjs'});
+  return new Promise(resolve=>setImmediate(()=>resolve({handles,listeners,windows,trays,timers,window:windows[0],advance:ms=>{now+=ms;for(const fn of timers)fn();}})));
 }
 const e=win=>({sender:win.webContents,senderFrame:win.webContents.mainFrame});
 const invoke=(h,name,...args)=>h.handles.get('copilot:'+name)(e(h.window),...args);
@@ -116,6 +130,76 @@ test('packaged renderer cannot open Vite-origin capture window',async()=>{
  const h=await boot({packaged:true});
  assert.equal(invoke(h,'live-open'),false);
  assert.equal(h.windows.length,1);
+});
+
+test('only confirmed capture hides both taskbar buttons; tray restores workspace and existing controls',async()=>{
+  const h=await boot();invoke(h,'live-open');const c=h.windows[1];
+  const publish=(win,packet)=>h.listeners.get('copilot:live-packet')(e(win),packet);
+  publish(h.window,{type:'capture_state',attempt:1,phase:'connecting'});
+  publish(c,{type:'capture_state',attempt:1,phase:'active'}); // no matching attempt
+  assert.equal(h.trays.length,0);
+  publish(c,{type:'capture_state',attempt:1,phase:'connecting'});
+  publish(c,{type:'status',text:'Vosk listo. Reproduce una frase en Windows.'});
+  assert.notEqual(h.window.skipTaskbar,true);
+  publish(c,{type:'capture_state',attempt:1,phase:'active'});
+  assert.equal(c.options.webPreferences.backgroundThrottling,false);
+  assert.equal(h.window.skipTaskbar,true);assert.equal(c.skipTaskbar,true);
+  assert.equal(h.window.visible,true);assert.equal(c.visible,false);
+  h.window.minimized=true;h.trays[0].emit('click');
+  assert.equal(h.window.minimized,false);assert.equal(h.window.visible,true);
+  c.minimized=true;h.trays[0].menu[1].click();
+  assert.equal(c.visible,true);assert.equal(c.minimized,false);assert.equal(h.windows.length,2);
+  assert.equal(h.handles.get('copilot:capture-hide')(e(c)),true);
+  assert.equal(c.visible,false);
+  assert.equal(invoke(h,'ui-language','en'),true);
+  assert.equal(h.trays[0].menu[0].label,'Restore workspace');
+  assert.equal(h.handles.get('copilot:capture-language')(e(c)),'en');
+  assert.equal(invoke(h,'ui-language','fr'),false);
+  assert.throws(()=>h.handles.get('copilot:capture-language')(e(h.window)),/Untrusted/);
+  assert.equal(h.handles.get('copilot:capture-hide')(e(h.window)),false);
+  publish(c,{type:'capture_state',attempt:1,phase:'stopping'});
+  assert.equal(h.window.skipTaskbar,false);assert.equal(c.skipTaskbar,false);
+  assert.equal(h.trays[0].destroyed,true);assert.equal(h.timers.size,0);
+  publish(c,{type:'capture_state',attempt:1,phase:'active'});
+  assert.equal(h.trays.length,1); // late ready cannot rehide after stop
+  publish(c,{type:'capture_state',attempt:1,phase:'stopped'});
+  assert.equal(c.visible,true);
+});
+
+test('stalled PCM or suspended audio reveals controls and prevents rehide until a new attempt',async()=>{
+  const h=await boot();invoke(h,'live-open');const c=h.windows[1];
+  const publish=packet=>h.listeners.get('copilot:live-packet')(e(c),packet);
+  const phase=(attempt,value)=>publish({type:'capture_state',attempt,phase:value});
+  phase(1,'connecting');phase(1,'active');
+  h.advance(4000);publish({type:'metrics',frames:40});h.advance(4000);
+  assert.equal(c.visible,false); // increasing PCM keeps the watchdog alive
+  publish({type:'metrics',frames:40});h.advance(4000); // repeated count is not progress
+  assert.equal(c.visible,true);assert.equal(h.window.skipTaskbar,false);assert.equal(h.timers.size,0);
+  assert.equal(h.handles.get('copilot:capture-hide')(e(c)),false);
+  phase(1,'active');assert.equal(c.visible,true);
+  phase(1,'stopped');phase(2,'connecting');phase(2,'active');
+  assert.equal(c.visible,false);
+  publish({type:'capture_attention',attempt:1});assert.equal(c.visible,false);
+  publish({type:'capture_attention',attempt:2});assert.equal(c.visible,true);
+  assert.equal(h.window.skipTaskbar,false);
+});
+
+test('tray failure and capture crash/close preserve normal recovery and release native lifetimes',async()=>{
+  const unavailable=await boot({trayFails:true});invoke(unavailable,'live-open');const first=unavailable.windows[1];
+  const send=(h,c,phase)=>h.listeners.get('copilot:live-packet')(e(c),{type:'capture_state',attempt:1,phase});
+  send(unavailable,first,'connecting');send(unavailable,first,'active');
+  assert.equal(unavailable.window.skipTaskbar,false);assert.equal(first.visible,true);
+  assert.equal(unavailable.timers.size,0);
+  for (const ending of ['error','crash','close-main']) {
+    const h=await boot();invoke(h,'live-open');const c=h.windows[1];
+    send(h,c,'connecting');send(h,c,'active');
+    if(ending==='error')send(h,c,'error');
+    else if(ending==='crash')c.webContents.emit('render-process-gone');
+    else h.window.close();
+    assert.equal(h.timers.size,0);assert.equal(h.trays[0].destroyed,true);
+    if(ending==='close-main')assert.equal(c.isDestroyed(),true);
+    else {assert.equal(c.visible,true);assert.equal(h.window.skipTaskbar,false);}
+  }
 });
 
 const generated = () => ({type:'generated_suggestion',kind:'ai_generated',session_id:'abc-123',

@@ -7,16 +7,27 @@ const vm = require('node:vm');
 const ts = require('typescript');
 const React = require('react');
 const {renderToStaticMarkup} = require('react-dom/server');
-function load(file) {
+function load(file, imports = {}) {
   const compiled = ts.transpileModule(fs.readFileSync(path.join(__dirname,file),'utf8'), {
     compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS},
   }).outputText;
   const module = {exports:{}};
-  vm.runInNewContext(compiled,{require,exports:module.exports,module});
+  vm.runInNewContext(compiled,{require: id => Object.hasOwn(imports,id) ? imports[id] : require(id),
+    exports:module.exports,module,window:{}});
   return module.exports;
 }
-const {LiveSuggestion} = load('LiveSuggestion.tsx');
+const translations = {window:{}};
+vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../../public/ui-language.js'),'utf8'), translations);
+let language = 'es';
+const i18n = {useI18n:()=>({language,saved:true,setLanguage(){},t:text=>translations.window.copilotUi.translate(language,text)})};
+const {LiveSuggestion} = load('LiveSuggestion.tsx', {'../../i18n':i18n});
 const {initialLiveState, receiveLiveEvent, restoreLiveState} = load('liveState.ts');
+const {LiveWorkspace} = load('LiveWorkspace.tsx', {
+  '../../api': {api:{}}, './LiveSuggestion': {LiveSuggestion},
+  '../../i18n':i18n,
+  './liveState': {initialLiveState,receiveLiveEvent,restoreLiveState},
+});
+const {default:App} = load('../../App.tsx', {'./api':{api:{}},'./features/live/LiveWorkspace':{LiveWorkspace},'./i18n':i18n});
 const render = item => renderToStaticMarkup(React.createElement(LiveSuggestion,{item}));
 test('generated answers show unverified AI provenance, not documentary attribution',()=>{
   const html=render({type:'generated_suggestion',kind:'ai_generated',question:'Explain caching?',
@@ -40,6 +51,57 @@ test('no evidence remains visible without a fabricated answer',()=>{
   const html=render({type:'suggestion',question:'Question?',status:'no_evidence',answer:null,source:null,match_type:null});
   assert.match(html,/Sin respuesta suficientemente relacionada/);
   assert.doesNotMatch(html,/generada por IA|Fuente:/);
+});
+
+test('EN/ES presentation changes immediately while source content and canonical Live states stay unchanged',()=>{
+  const item={type:'suggestion',question:'Transcripción',answer:'Fuente:',status:'found',match_type:'exact_qa',
+    source:{document_name:'Diagnóstico',location:'Pregunta'}};
+  const original=JSON.stringify(item);
+  language='en';
+  try {
+    const html=render(item);
+    assert.match(html,/Exact answer from document/);
+    assert.match(html,/<h3>Transcripción<\/h3>/);assert.match(html,/<p>Fuente:<\/p>/);
+    assert.match(html,/Source: Diagnóstico · Pregunta/);
+    const workspace=renderToStaticMarkup(React.createElement(LiveWorkspace,{showError:()=>{}}));
+    assert.match(workspace,/aria-label="Transcript history"/);assert.match(workspace,/Prepare capture/);
+    const shell=renderToStaticMarkup(React.createElement(App));
+    assert.match(shell,/Interface language/);assert.match(shell,/Knowledge Base/);
+    const state=receiveLiveEvent(initialLiveState,{type:'status',text:'Deepgram Nova-3 listo. Reproduce una frase en Windows.'});
+    assert.equal(state.phase,'listening');assert.equal(state.provider,'Deepgram Nova-3');
+    assert.equal(translations.window.copilotUi.translate('en',state.status),'Deepgram Nova-3 ready. Play a sentence in Windows.');
+    assert.equal(JSON.stringify(item),original);
+  } finally {language='es';}
+  assert.match(render(item),/Respuesta exacta del documento/);
+  const shell=renderToStaticMarkup(React.createElement(App));
+  assert.match(shell,/Idioma de interfaz/);assert.match(shell,/Base de conocimiento/);
+});
+
+test('locale preference validates persisted values and tolerates denied storage',()=>{
+  const {readUiLanguage,saveUiLanguage}=load('../../i18n.tsx');
+  for(const value of [null,'fr','en-US','ES',''])assert.equal(readUiLanguage({getItem:()=>value}),'es');
+  assert.equal(readUiLanguage({getItem:()=> 'en'}),'en');
+  assert.equal(readUiLanguage({getItem(){throw new Error('denied');}}),'es');
+  const stored=[];
+  assert.equal(saveUiLanguage({setItem:(...args)=>stored.push(args)},'en'),true);
+  assert.deepEqual(stored,[['copilot.ui-language','en']]);
+  assert.equal(saveUiLanguage({setItem(){throw new Error('quota');}},'es'),false);
+});
+
+test('workspace puts answers first in reading order and keeps diagnostics secondary, not capture controls',()=>{
+  const html=renderToStaticMarkup(React.createElement(LiveWorkspace,{showError:()=>{}}));
+  assert.ok(html.indexOf('id="live-answers-title"') < html.indexOf('id="live-transcript-title"'));
+  assert.match(html,/tabindex="0" role="region" aria-label="Historial de respuestas"/);
+  assert.match(html,/tabindex="0" role="region" aria-label="Historial de transcripción"/);
+  const disclosures=html.match(/<details\b[\s\S]*?<\/details>/g);
+  assert.equal(disclosures.length,2);
+  assert.ok(disclosures.every(item=>!/^<details[^>]*\bopen\b/.test(item)));
+  assert.match(disclosures[1],/Diagnóstico[\s\S]*tramas PCM/);
+  const essential=html.replace(/<details\b[\s\S]*?<\/details>/g,'');
+  assert.match(essential,/Preparar captura/);
+  assert.match(essential,/Detener y cerrar/);
+  assert.match(essential,/Captura toda la salida de Windows/);
+  assert.match(essential,/no garantiza invisibilidad/);
 });
 
 test('interim text is replaced in place; finals and answers have separate newest-first bounds',()=>{

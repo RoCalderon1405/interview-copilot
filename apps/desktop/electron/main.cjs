@@ -1,6 +1,6 @@
 /** Interview Copilot native window shell. System audio is deliberately NOT enabled here. */
 'use strict';
-const { app, BrowserWindow, ipcMain, desktopCapturer } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, Tray, Menu, nativeImage } = require('electron');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const DEV_ORIGIN = 'http://127.0.0.1:5173';
@@ -8,6 +8,100 @@ const isDev = !app.isPackaged;
 const productionHref = pathToFileURL(path.join(__dirname, '../dist/index.html')).href;
 let mainWindow;
 let captureWindow;
+let recoveryTray;
+let uiLanguage = 'es';
+let capturePhase = 'idle';
+let captureAttempt = 0;
+let quitting = false;
+let hideAllowed = true;
+let continuityTimer;
+let lastPcmAt = 0;
+let lastPcmFrames = 0;
+
+function revealCaptureSafety() {
+  hideAllowed = false;
+  restoreTaskbar(true);
+  emitLive({type:'error', text:'Continuidad de audio sin confirmar. Controles restaurados; revisa o detén la captura.'});
+}
+
+function restoreWindow(win, focus = true) {
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  if (focus) { win.show(); win.focus(); }
+  else win.showInactive();
+}
+function updateRecoveryMenu() {
+  if (!recoveryTray) return;
+  const es = uiLanguage === 'es';
+  recoveryTray.setToolTip('Interview Copilot — ' + (es ? 'captura activa' : 'capture active'));
+  recoveryTray.setContextMenu(Menu.buildFromTemplate([
+    {label: es ? 'Restaurar workspace' : 'Restore workspace', click: () => restoreWindow(mainWindow)},
+    {label: es ? 'Mostrar controles de audio' : 'Show audio controls', click: () => restoreWindow(captureWindow)},
+    {label: es ? 'Detener y cerrar captura' : 'Stop and close capture', click: () => captureWindow?.close()},
+  ]));
+}
+function restoreTaskbar(showControls = false) {
+  if (continuityTimer) clearInterval(continuityTimer);
+  continuityTimer = undefined;
+  for (const win of [mainWindow, captureWindow]) {
+    if (win && !win.isDestroyed()) win.setSkipTaskbar(false);
+  }
+  recoveryTray?.destroy();
+  recoveryTray = undefined;
+  if (showControls && !quitting) restoreWindow(captureWindow, false);
+}
+function activateCapturePresentation() {
+  if (process.platform !== 'win32' || !captureWindow || captureWindow.isDestroyed()) return;
+  try {
+    if (!recoveryTray) {
+      // A small native BGRA waveform icon; no downloaded assets or native dependencies.
+      const pixels = Buffer.alloc(16 * 16 * 4);
+      for (let x = 2; x < 14; x++) {
+        const height = [2, 4, 6, 3][Math.floor(x / 2) % 4];
+        for (let y = 8 - height; y < 8 + height; y++) {
+          const i = (y * 16 + x) * 4;
+          pixels[i] = 245; pixels[i + 1] = 190; pixels[i + 2] = 110; pixels[i + 3] = 255;
+        }
+      }
+      const icon = nativeImage.createFromBitmap(pixels, {width:16, height:16});
+      if (icon.isEmpty()) throw new Error('Empty recovery icon');
+      recoveryTray = new Tray(icon);
+      recoveryTray.on('click', () => restoreWindow(mainWindow));
+      updateRecoveryMenu();
+    }
+    mainWindow.setSkipTaskbar(true);
+    captureWindow.setSkipTaskbar(true);
+    if (hideAllowed) { captureWindow.hide(); restoreWindow(mainWindow); }
+    if (!continuityTimer && hideAllowed) {
+      lastPcmAt = Date.now(); lastPcmFrames = 0;
+      continuityTimer = setInterval(() => {
+        if (Date.now() - lastPcmAt > 6000) revealCaptureSafety();
+      }, 2000);
+      continuityTimer.unref();
+    }
+  } catch {
+    // Never remove the normal recovery path if the native tray cannot be created.
+    hideAllowed = false;
+    restoreTaskbar(true);
+  }
+}
+
+function acceptCapturePhase(raw) {
+  if (!raw || raw.type !== 'capture_state' || !Number.isSafeInteger(raw.attempt) || raw.attempt < 1 ||
+      !['connecting','active','stopping','stopped','error'].includes(raw.phase)) return;
+  if (raw.attempt < captureAttempt) return;
+  if (raw.attempt > captureAttempt) {
+    if (raw.phase !== 'connecting') return;
+    captureAttempt = raw.attempt;
+    hideAllowed = true;
+  } else {
+    const transitions = {connecting:['active','stopping','stopped','error'], active:['stopping','stopped','error'], stopping:['stopped','error']};
+    if (!transitions[capturePhase]?.includes(raw.phase)) return;
+  }
+  capturePhase = raw.phase;
+  if (raw.phase === 'active') activateCapturePresentation();
+  else restoreTaskbar(raw.phase === 'stopped' || raw.phase === 'error');
+}
 const liveEvents = [];
 const LIVE_EVENT_LIMIT = 80;
 const CAPTURE_PATH = '/audio-lab/transcribe.html';
@@ -74,19 +168,21 @@ function openLiveCapture() {
   // Only the verified Vite-origin development pipeline is enabled in this milestone.
   if (!isDev || process.platform !== 'win32') return false;
   if (captureWindow && !captureWindow.isDestroyed()) {
-    captureWindow.show(); captureWindow.focus(); return true;
+    restoreWindow(captureWindow); return true;
   }
   liveEvents.length = 0;
   captureWindow = new BrowserWindow({
-    width: 680, height: 740, minWidth: 490, minHeight: 520,
+    width: 560, height: 720, minWidth: 490, minHeight: 520,
     title: 'Live audio — autorización y controles',
     backgroundColor: '#0a0f19', autoHideMenuBar: true,
     webPreferences: {
       partition: 'live-capture', preload: path.join(__dirname, 'capture-preload.cjs'),
       contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true,
+      backgroundThrottling: false,
     },
   });
   const current = captureWindow;
+  capturePhase = 'idle'; captureAttempt = 0; hideAllowed = true;
   // Separate session: the production renderer continues to deny media permissions.
   current.webContents.session.setDisplayMediaRequestHandler(async (request, callback) => {
     try {
@@ -103,8 +199,15 @@ function openLiveCapture() {
     if (url !== (isDev ? CAPTURE_URL : pathToFileURL(CAPTURE_FILE).href)) event.preventDefault();
   });
   current.on('closed', () => {
+    restoreTaskbar();
+    capturePhase = 'stopped';
     if (captureWindow === current) captureWindow = undefined;
     emitLive({type:'status',text:'Captura detenida.'});
+  });
+  current.webContents.on('render-process-gone', () => {
+    capturePhase = 'error';
+    restoreTaskbar(true);
+    emitLive({type:'error', text:'La ventana de audio dejó de responder. Cierra y prepara la captura de nuevo.'});
   });
   if (isDev) void current.loadURL(CAPTURE_URL);
   else void current.loadFile(CAPTURE_FILE);
@@ -147,6 +250,12 @@ function createWindow() {
   mainWindow.webContents.on('will-navigate', (event, url) => { if (!trustedUrl(url)) event.preventDefault(); });
   if (isDev) void mainWindow.loadURL(DEV_ORIGIN);
   else void mainWindow.loadFile(path.join(__dirname,'../dist/index.html'));
+  mainWindow.on('close', () => {
+    // A hidden capture window must not keep the application/audio alive on its own.
+    quitting = true;
+    restoreTaskbar();
+    if (captureWindow && !captureWindow.isDestroyed()) captureWindow.close();
+  });
 }
 app.whenReady().then(() => {
   ipcMain.handle('copilot:window-state', event => {
@@ -178,13 +287,39 @@ app.whenReady().then(() => {
     trustedWindow(event);
     return {open: Boolean(captureWindow && !captureWindow.isDestroyed()), events: [...liveEvents]};
   });
+  ipcMain.handle('copilot:ui-language', (event, language) => {
+    trustedWindow(event);
+    if (!['en','es'].includes(language)) return false;
+    uiLanguage = language;
+    if (captureWindow && !captureWindow.isDestroyed()) captureWindow.webContents.send('copilot:ui-language', language);
+    updateRecoveryMenu();
+    return true;
+  });
+  ipcMain.handle('copilot:capture-language', event => {
+    if (!trustedCapture(event)) throw new Error('Untrusted IPC request rejected');
+    return uiLanguage;
+  });
+  ipcMain.handle('copilot:capture-hide', event => {
+    if (!trustedCapture(event) || capturePhase !== 'active' || !hideAllowed || !recoveryTray) return false;
+    captureWindow.hide();
+    return true;
+  });
   ipcMain.on('copilot:live-packet', (event, data) => {
     if (!trustedCapture(event)) return;
+    if (data?.type === 'capture_state') { acceptCapturePhase(data); return; }
+    if (data?.type === 'capture_attention') {
+      if (data.attempt === captureAttempt && capturePhase === 'active') revealCaptureSafety();
+      return;
+    }
     const safe = safeLiveEvent(data);
     if (!safe || (safe.type === 'suggestion' && !safe.question.trim())) return;
+    if (safe.type === 'metrics' && safe.frames > lastPcmFrames) {
+      lastPcmFrames = safe.frames; lastPcmAt = Date.now();
+    }
     emitLive(safe);
   });
   createWindow();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
+app.on('before-quit', () => { quitting = true; restoreTaskbar(); });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

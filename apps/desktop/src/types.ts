@@ -27,6 +27,7 @@ declare global {
       openLiveCapture(): Promise<boolean>;
       closeLiveCapture(): Promise<boolean>;
       getLiveState(): Promise<{open: boolean; events: LiveEvent[]}>;
+      setUiLanguage(language: 'en' | 'es'): Promise<boolean>;
       onLiveEvent(callback: (event: LiveEvent) => void): () => void;
     };
   }

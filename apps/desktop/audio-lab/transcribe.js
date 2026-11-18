@@ -6,6 +6,25 @@ const consent = document.getElementById('consent');
 const consentDescription = document.getElementById('consent-description');
 const start = document.getElementById('start');
 const stop = document.getElementById('stop');
+const hideControls = document.getElementById('hide-controls');
+function uiText(element, text) {
+  if (window.copilotCaptureUi) window.copilotCaptureUi.set(element,text);
+  else element.textContent = text;
+}
+function contentText(element, text) {
+  if (window.copilotCaptureUi) window.copilotCaptureUi.content(element,text);
+  else element.textContent = text;
+}
+hideControls.hidden = !window.copilotCapture;
+hideControls.disabled = true;
+hideControls.addEventListener('click', () => {
+  void window.copilotCapture?.hideControls().then(hidden => {
+    if (!hidden) {
+      hideControls.disabled = true;
+      uiText(status,'No se pueden ocultar los controles en este intento. Detén y prepara la captura de nuevo.');
+    }
+  }).catch(() => { hideControls.disabled = true; });
+});
 const language = document.getElementById('language');
 const provider = document.getElementById('provider');
 const vocabularyProfile = document.getElementById('vocabulary-profile');
@@ -24,14 +43,18 @@ let silentOutput = null, worklet = null, socket = null, frame = null;
 let busy = false, stopping = false, pcmFrames = 0, stopTimeout = null;
 let lastPublishedMetric = 0;
 let captureRevision = 0;
+let captureAttempt = 0;
+function publishPhase(phase) {
+  if (captureAttempt) publish({type:'capture_state', phase, attempt:captureAttempt});
+}
 function engineLabel() {
   return provider.value === 'faster-whisper' ? 'Faster-Whisper' : provider.value === 'deepgram' ? 'Deepgram Nova-3' : 'Vosk';
 }
 function isCloud() { return provider.value === 'deepgram'; }
 function updateConsent() {
-  consentDescription.textContent = isCloud()
+  uiText(consentDescription, isCloud()
     ? 'Autorizo capturar todo el audio de salida de Windows y enviarlo mediante el backend a Deepgram (nube, con posibles cargos y tratamiento conforme a la política del proveedor).'
-    : 'Autorizo capturar todo el audio de salida de Windows y procesarlo localmente.';
+    : 'Autorizo capturar todo el audio de salida de Windows y procesarlo localmente.');
 }
 updateConsent();
 function publish(packet) {
@@ -39,7 +62,7 @@ function publish(packet) {
   window.copilotCapture?.publish(packet);
 }
 function setStatus(text) {
-  status.textContent = text;
+  uiText(status,text);
   publish({type:'status',text});
 }
 
@@ -50,10 +73,10 @@ async function updateSemanticStatus() {
     const response = await fetch(`${API}/semantic/status`, { cache: 'no-store' });
     if (!response.ok) throw new Error('unavailable');
     const data = await response.json();
-    semanticStatus.textContent = `Índice semántico local: ${data.indexed}/${data.questions} preguntas vectorizadas. ` +
-      (data.pending ? 'Las preguntas sin indexar solo admiten coincidencia exacta.' : 'Índice actualizado.');
+    uiText(semanticStatus, `Índice semántico local: ${data.indexed}/${data.questions} preguntas vectorizadas. ` +
+      (data.pending ? 'Las preguntas sin indexar solo admiten coincidencia exacta.' : 'Índice actualizado.'));
   } catch {
-    semanticStatus.textContent = 'Índice semántico no disponible; continúan las coincidencias exactas.';
+    uiText(semanticStatus, 'Índice semántico no disponible; continúan las coincidencias exactas.');
   }
 }
 void updateSemanticStatus();
@@ -64,11 +87,11 @@ async function updateSpeechStatus() {
     if (!response.ok) throw new Error('unavailable');
     const data = await response.json();
     const selected = data.providers?.[provider.value] ?? (provider.value === 'vosk' ? data : null);
-    speechStatus.textContent = selected?.languages?.[language.value]?.available
+    uiText(speechStatus, selected?.languages?.[language.value]?.available
       ? `${engineLabel()} disponible. ${provider.value === 'faster-whisper' ? 'Solo resultados finales; detener cancela segmentos pendientes.' : 'Transcripción parcial y final.'}${isCloud() ? ' El backend enviará audio a Deepgram y puede generar cargos.' : ''}`
-      : `${engineLabel()} no disponible para este idioma. ${isCloud() ? 'Configura COPILOT_DEEPGRAM_API_KEY y websockets en el backend.' : 'Revisa el runtime o modelo local.'} No hay fallback automático.`;
+      : `${engineLabel()} no disponible para este idioma. ${isCloud() ? 'Configura COPILOT_DEEPGRAM_API_KEY y websockets en el backend.' : 'Revisa el runtime o modelo local.'} No hay fallback automático.`);
   } catch {
-    speechStatus.textContent = 'No se pudo consultar el motor. Verifica el backend antes de iniciar.';
+    uiText(speechStatus, 'No se pudo consultar el motor. Verifica el backend antes de iniciar.');
   }
 }
 provider.addEventListener('change', () => {
@@ -103,7 +126,7 @@ function measure() {
   for (const sample of samples) power += sample * sample;
   const rms = Math.sqrt(power / samples.length);
   level.style.width = `${Math.min(100, rms * 400)}%`;
-  info.textContent = `Pista: ${stream?.getAudioTracks()[0]?.readyState ?? 'ninguna'} · RMS: ${rms.toFixed(5)} · PCM enviado: ${pcmFrames} tramas`;
+  uiText(info, `Pista: ${stream?.getAudioTracks()[0]?.readyState ?? 'ninguna'} · RMS: ${rms.toFixed(5)} · PCM enviado: ${pcmFrames} tramas`);
   if (window.copilotCapture && performance.now() - lastPublishedMetric > 1000) {
     lastPublishedMetric = performance.now();
     publish({type:'metrics',frames:pcmFrames});
@@ -130,12 +153,14 @@ async function cleanup() {
   busy = false;
   stopping = false;
   stop.disabled = true;
+  hideControls.disabled = true;
   language.disabled = false;
   provider.disabled = false;
   vocabularyProfile.disabled = !isCloud();
   start.disabled = !consent.checked;
   level.style.width = '0%';
   if (closingContext) { try { await closingContext.close(); } catch { /* already closed */ } }
+  if (revision === captureRevision) publishPhase('stopped');
   return revision;
 }
 
@@ -145,6 +170,7 @@ async function fail(error) {
   if (revision !== captureRevision) return;
   setStatus(`FALLO: ${message}`);
   publish({type:'error',text:message});
+  publishPhase('error');
 }
 
 async function beginPcm(revision) {
@@ -160,15 +186,25 @@ async function beginPcm(revision) {
     }
     socket.send(event.data); // One transferable 100 ms mono PCM16 frame (3200 bytes).
     pcmFrames++;
+    // Continuity must not depend on visible-window requestAnimationFrame callbacks.
+    if (performance.now() - lastPublishedMetric > 1000) {
+      lastPublishedMetric = performance.now();
+      publish({type:'metrics',frames:pcmFrames});
+    }
   };
   source.connect(worklet);
   worklet.connect(silentOutput); // Gain 0: never play loopback again.
+  if (context.state !== 'running') throw new Error('El contexto de audio no está activo. Revisa los controles y vuelve a iniciar.');
   setStatus(`${engineLabel()} listo. Reproduce una frase en Windows.`);
+  hideControls.disabled = false;
+  publishPhase('active');
 }
 
 start.addEventListener('click', async () => {
   if (!consent.checked || busy) return;
   const revision = ++captureRevision;
+  captureAttempt++;
+  publishPhase('connecting');
   busy = true;
   start.disabled = true;
   language.disabled = true;
@@ -177,12 +213,12 @@ start.addEventListener('click', async () => {
   const selectedProvider = provider.value;
   const selectedLanguage = language.value;
   stop.disabled = false;
-  partial.textContent = 'Esperando voz…';
+  uiText(partial, 'Esperando voz…');
   finals.replaceChildren();
   questions.replaceChildren();
-  questionHint.textContent = 'Esperando una pregunta completa…';
+  uiText(questionHint, 'Esperando una pregunta completa…');
   pcmFrames = 0;
-  speechLatency.textContent = 'Latencia EOS estimada: pendiente.';
+  uiText(speechLatency, 'Latencia EOS estimada: pendiente.');
   void updateSemanticStatus();
   setStatus('Solicitando audio del sistema…');
   try {
@@ -199,6 +235,11 @@ start.addEventListener('click', async () => {
       if (revision === captureRevision && !stopping) void fail(new Error('Una pista del sistema terminó'));
     }, { once: true }));
     context = new AudioContext();
+    context.onstatechange = () => {
+      if (revision === captureRevision && busy && !stopping && context && context.state !== 'running') {
+        publish({type:'capture_attention', attempt:captureAttempt});
+      }
+    };
     source = context.createMediaStreamSource(new MediaStream(tracks));
     analyser = context.createAnalyser(); analyser.fftSize = 2048;
     silentOutput = context.createGain(); silentOutput.gain.value = 0;
@@ -245,16 +286,17 @@ start.addEventListener('click', async () => {
           void beginPcm(revision).catch(error => { if (revision === captureRevision) void fail(error); });
         }
       } else if (packet.type === 'partial') {
-        partial.textContent = packet.text || 'Escuchando…';
+        if (packet.text) contentText(partial,packet.text);
+        else uiText(partial,'Escuchando…');
       } else if (packet.type === 'final') {
         const latency = packet.end_of_speech_latency_ms;
-        speechLatency.textContent = typeof latency === 'number' && Number.isFinite(latency) && latency >= 0 && latency <= 120000
+        uiText(speechLatency, typeof latency === 'number' && Number.isFinite(latency) && latency >= 0 && latency <= 120000
           ? `EOS a resultado STT (estimado en backend): ${(latency / 1000).toFixed(2)} s. No incluye captura/IPC.`
-          : 'Sin medida EOS (Vosk, Deepgram o corte por límite).';
+          : 'Sin medida EOS (Vosk, Deepgram o corte por límite).');
         const text = document.createElement('p');
         text.textContent = packet.text;
         finals.appendChild(text);
-        partial.textContent = 'Escuchando…';
+        uiText(partial, 'Escuchando…');
       } else if (packet.type === 'suggestion' && typeof packet.question === 'string') {
         // The backend already performs exact-Q&A retrieval on finalized questions.
         // Only trust a documented exact match; never imply that a similar excerpt is an answer.
@@ -272,14 +314,17 @@ start.addEventListener('click', async () => {
           const semantic = hasAnswer && packet.match_type === 'semantic_qa';
           const detail = document.createElement('p');
           detail.className = (exact || semantic) ? 'answer-status found' : 'answer-status';
-          detail.textContent = exact ? 'Respuesta exacta del documento'
+          uiText(detail, exact ? 'Respuesta exacta del documento'
             : semantic ? 'Posible respuesta semántica (revisar antes de usar)'
-            : 'Sin respuesta suficientemente relacionada en tus documentos';
+            : 'Sin respuesta suficientemente relacionada en tus documentos');
           item.appendChild(detail);
           if (semantic && typeof packet.matched_question === 'string') {
             const original = document.createElement('p');
             original.className = 'source-note';
-            original.textContent = `Pregunta del documento: ${packet.matched_question}`;
+            const prefix = document.createElement('span');
+            uiText(prefix,'Pregunta del documento:');
+            original.appendChild(prefix);
+            original.appendChild(document.createTextNode(` ${packet.matched_question}`));
             item.appendChild(original);
           }
           if (exact || semantic) {
@@ -291,12 +336,15 @@ start.addEventListener('click', async () => {
             if (source && typeof source.document_name === 'string' && source.document_name.trim()) {
               const attribution = document.createElement('p');
               attribution.className = 'source-note';
-              attribution.textContent = `Fuente: ${source.document_name}${typeof source.location === 'string' && source.location.trim() ? ` · ${source.location}` : ''}`;
+              const prefix = document.createElement('span');
+              uiText(prefix,'Fuente:');
+              attribution.appendChild(prefix);
+              attribution.appendChild(document.createTextNode(` ${source.document_name}${typeof source.location === 'string' && source.location.trim() ? ` · ${source.location}` : ''}`));
               item.appendChild(attribution);
             }
           }
           questions.appendChild(item);
-          questionHint.textContent = '';
+          contentText(questionHint, '');
         }
       } else if (packet.type === 'error') {
         void fail(new Error(`${packet.code}: ${packet.message}`));
@@ -314,6 +362,8 @@ start.addEventListener('click', async () => {
 stop.addEventListener('click', () => {
   if (!busy || stopping) return;
   stopping = true;
+  hideControls.disabled = true;
+  publishPhase('stopping');
   setStatus(provider.value === 'vosk' ? 'Deteniendo; esperando último resultado de Vosk…' : 'Deteniendo y cancelando transcripción pendiente…');
   stream?.getTracks().forEach(track => track.stop());
   try { source?.disconnect(worklet); } catch { /* node not connected */ }

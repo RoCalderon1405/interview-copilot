@@ -4,19 +4,25 @@
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src http://127.0.0.1:8765 ws://127.0.0.1:8765 ws://127.0.0.1:5173; object-src 'none'; frame-src 'none'; base-uri 'none'">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Windows Audio → STT → Preguntas → Respuestas</title>
+  <title>Live audio — autorización y controles</title>
   <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body class="capture-page">
   <main>
-    <h1>Audio → STT → Preguntas → Respuestas</h1>
-    <p>Escucha el audio de salida de Windows y envía PCM al backend local (127.0.0.1:8765). Con Deepgram, el backend transmite audio a la nube y puede haber cargos. No guardamos grabaciones localmente.</p>
-    <p class="muted">Esta ventana de audio no solicita exclusión de pantalla y puede aparecer al compartir. La protección de la ventana principal es de mejor esfuerzo, no una garantía de invisibilidad.</p>
+    <header class="capture-header"><h1>Audio del sistema</h1>
+      <p>Captura toda la salida de Windows. No guardamos grabaciones localmente.</p>
+      <p class="capture-warning">Deepgram envía audio a la nube y puede generar cargos. Esta ventana no solicita exclusión y puede aparecer al compartir pantalla; la protección de la principal es de mejor esfuerzo.</p>
+    </header>
+    <div class="capture-fields">
     <label for="provider">Motor de transcripción
       <select id="provider"><option value="vosk" selected>Vosk (predeterminado)</option><option value="faster-whisper">Faster-Whisper Small (CPU INT8)</option><option value="deepgram">Deepgram Nova-3 (nube, de pago)</option></select>
     </label>
+    <label for="language">Idioma de transcripción
+      <select id="language"><option value="en-US">English</option><option value="es-MX">Español</option></select>
+    </label>
+    </div>
     <p id="speech-status" class="muted" role="status">Consultando motores…</p>
-    <label for="vocabulary-profile">Perfil de entrevista (vocabulario técnico de Deepgram)
+    <label for="vocabulary-profile" class="capture-profile">Perfil de entrevista · Deepgram
       <select id="vocabulary-profile" disabled>
         <option value="general" selected>General de tecnología</option>
         <option value="frontend">Frontend</option>
@@ -31,20 +37,27 @@
         <option value="mobile">Mobile Development</option>
       </select>
     </label>
-    <label for="language">Idioma
-      <select id="language"><option value="en-US">English</option><option value="es-MX">Español</option></select>
-    </label>
-    <label><input type="checkbox" id="consent"> <span id="consent-description">Autorizo capturar todo el audio de salida de Windows y procesarlo localmente.</span></label>
-    <div class="controls"><button id="start" disabled>Iniciar transcripción</button><button id="stop" disabled>Detener</button></div>
-    <p id="status" role="status">Esperando consentimiento.</p>
-    <div class="meter"><div id="level"></div></div>
+    <label class="capture-consent"><input type="checkbox" id="consent"> <span id="consent-description">Autorizo capturar todo el audio de salida de Windows y procesarlo localmente.</span></label>
+    <section class="capture-actions" aria-label="Controles de captura">
+      <div class="controls"><button id="start" disabled>Iniciar transcripción</button><button id="stop" disabled>Detener</button><button id="hide-controls" hidden>Ocultar controles sin detener</button></div>
+      <p id="status" role="status">Esperando consentimiento.</p>
+      <div class="meter" aria-hidden="true"><div id="level"></div></div>
+    </section>
+    <div class="capture-extras">
+    <details><summary>Diagnóstico técnico</summary><div class="capture-detail-body">
     <p id="info">Pista: ninguna · PCM enviado: 0 tramas</p>
     <p id="speech-latency" class="muted">Latencia EOS estimada: pendiente.</p>
     <p id="semantic-status" class="muted">Búsqueda semántica: consultando índice local…</p>
-    <section aria-label="Preguntas detectadas"><h2>Preguntas y respuestas documentadas</h2><p id="question-hint" class="muted">Esperando una pregunta completa…</p><ul id="questions" aria-live="polite"></ul><p class="muted">Detección heurística: algunas preguntas podrían no reconocerse. Las respuestas exactas provienen del documento, no de una certificación de hechos. Las coincidencias semánticas son posibles respuestas por revisar. El fallback Ollama opcional se muestra por separado en la ventana principal.</p></section>
-    <section aria-label="Transcripción"><h2>Transcripción</h2><p id="partial" class="muted">Escuchando…</p><div id="finals" aria-live="polite"></div></section>
     <p class="muted">Si falla, copia solo el mensaje de estado. No compartas conversaciones privadas.</p>
+    </div></details>
+    <details><summary>Transcripción y respuestas locales</summary><div class="capture-detail-body">
+      <section aria-label="Preguntas detectadas"><h2>Preguntas y respuestas documentadas</h2><p id="question-hint" class="muted">Esperando una pregunta completa…</p><ul id="questions"></ul><p class="muted">Detección heurística: algunas preguntas podrían no reconocerse. Las respuestas exactas provienen del documento, no de una certificación de hechos. Las coincidencias semánticas son posibles respuestas por revisar. El fallback Ollama opcional se muestra por separado en la ventana principal.</p></section>
+      <section aria-label="Transcripción"><h2>Transcripción</h2><p id="partial" class="muted">Escuchando…</p><div id="finals"></div></section>
+    </div></details>
+    </div>
   </main>
+  <script src="../ui-language.js"></script>
+  <script src="capture-ui.js"></script>
   <script src="transcribe.js"></script>
 </body>
 </html>

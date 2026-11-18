@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('copilotDesktop', {
   openLiveCapture: () => ipcRenderer.invoke('copilot:live-open'),
   closeLiveCapture: () => ipcRenderer.invoke('copilot:live-close'),
   getLiveState: () => ipcRenderer.invoke('copilot:live-state'),
+  setUiLanguage: language => ipcRenderer.invoke('copilot:ui-language', language),
   onLiveEvent: callback => {
     const listener = (_event, packet) => callback(packet);
     ipcRenderer.on('copilot:live-event', listener);
