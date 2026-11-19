@@ -51,9 +51,13 @@ The CPU INT8 worker uses four threads and one worker. Endpointing uses 200 ms pr
 
 ## Optional Deepgram Nova-3
 
-Deepgram is cloud STT, independent of the LLM provider. Install `apps\api\requirements-deepgram.txt` into the API environment only if needed and approved. The backend reads `COPILOT_DEEPGRAM_API_KEY`; Electron never receives the key or contacts Deepgram directly.
+Deepgram is cloud STT, independent of the LLM provider. Install `apps\api\requirements-deepgram.txt` into the API environment only if needed and approved. In Windows development Electron, **Settings → Deepgram API Key** supports explicit Configure, Replace and Delete actions. Entry uses an empty Windows credential dialog: paste the API Key in **Password**, never your Windows password. Cancel leaves the stored key unchanged. Delete requires confirmation and does not revoke the key at Deepgram. Management is disabled in packaged builds and browsers.
 
-To enter a key without writing it into a file, use PowerShell from the repository root:
+The short-lived Python helper stores a generic credential (`InterviewCopilot/Deepgram`) in Windows Credential Manager for the current user, on this computer. The key never traverses React or Electron IPC. Close **all** audio windows first, including raw-audio/transcription labs: a capture reservation remains until its window closes, even after Stop. Conflicts fail without interrupting existing capture. Timeout or cancellation can race a completed write; refresh status before retrying. A configured status is not proof of valid remote authorization.
+
+For each new session, the backend resolves **environment first, Windows Credential Manager second**. An explicitly present but empty/invalid environment value blocks Deepgram; it never silently falls back to Windows. Settings distinguishes the stored Windows key from the backend's effective source. Backend unavailable means its state is unconfirmed, not unconfigured. Changing the stored key needs no backend restart; changing its process environment does. The backend and Electron/helper must run as the same Windows user. There is no automatic `.env` loading.
+
+The existing environment-variable workflow remains supported as an explicit override. To enter it without writing it into a file, use PowerShell from the repository root:
 
 ```powershell
 $secret = Read-Host 'Deepgram API Key' -AsSecureString
@@ -70,7 +74,7 @@ After stopping the backend, remove the key from an otherwise continuing PowerShe
 Remove-Item Env:\COPILOT_DEEPGRAM_API_KEY -ErrorAction SilentlyContinue
 ```
 
-Persistent Windows-secured credentials and cost/history features remain planned. See [Deepgram boundaries](architecture.md#deepgram-nova-3-streaming-extension-stt-001b) and [observed Windows evidence](live-mode.md#stt-001b--initial-deepgram-windows-observation-2026-11-16).
+Windows storage is not a vault against malware running as the same user or an administrator. Native input is not on the secure desktop and is not guaranteed invisible to screen sharing; Python cannot guarantee complete plaintext-memory erasure. Tokens are limited to 256 printable ASCII characters, with no whitespace. Cost/history features remain planned. See [credential boundaries](architecture.md#cloud-001--windows-credential-boundary), [credential acceptance checks](live-mode.md#cloud-001--windows-key-management) and [observed STT evidence](live-mode.md#stt-001b--initial-deepgram-windows-observation-2026-11-16).
 
 ## Documents and retrieval
 

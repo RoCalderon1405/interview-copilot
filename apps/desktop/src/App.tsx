@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { api } from './api';
 import {LiveWorkspace} from './features/live/LiveWorkspace';
+import {DeepgramSettings} from './features/settings/DeepgramSettings';
 import {useI18n} from './i18n';
 import type { AnswerResponse, DocumentRecord, Feedback, LiveWindowState, PracticeQuestion, Session, SessionReport } from './types';
 
@@ -131,7 +132,7 @@ export default function App() {
           onTopState={onTopState} onTopBusy={onTopBusy}
           onModeChange={mode=>{void changeWindow('mode',mode);}}
           onOpacityChange={opacity=>{void changeWindow('opacity',opacity);}} onTopChange={()=>{void toggleOnTop();}}/>}
-        {page === 'settings' && <SettingsPage />}
+        {page === 'settings' && <><SettingsPage /><DeepgramSettings /></>}
       </div>
     </main>
   </div>;
@@ -176,7 +177,7 @@ function AnswerCard({answer}: {answer:AnswerResponse}) {
    return <div className="answer-box"><div className="answer-heading"><Sparkles size={17}/> {t(answer.match_type==='document_excerpt'?'Document excerpt':'Answer from your files')} <span className="tiny-pill">{answer.match_type === null ? '' : t(answer.match_type === 'exact_qa' ? 'Coincidencia exacta' : answer.match_type === 'document_excerpt' ? 'Document excerpt' : 'Coincidencia similar')}</span></div><p>{answer.answer}</p><SourceTag source={answer.source}/></div>;
 }
 function Practice({showError}: {showError:(e:unknown)=>void}) {
-   const {t} = useI18n();
+    const {t} = useI18n();
   const [session,setSession] = useState<Session|null>(null);
   const [question,setQuestion] = useState<PracticeQuestion|null>(null);
   const [draft,setDraft] = useState('');

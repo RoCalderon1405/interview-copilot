@@ -3,6 +3,9 @@
 .session-report h3{font-size:13px;margin:22px 0 12px}.review-list{display:grid;gap:10px}.review-item{padding:13px;border:1px solid #30415a;border-radius:10px;display:grid;gap:7px}.review-item strong{font-size:13px}.review-item span{font-size:11px;color:#9badc0}
 
 /* Live presentation stays scoped so Knowledge and Practice keep their layout. */
+.credential-settings{margin-top:24px}
+.credential-settings p{max-width:70ch;line-height:1.6}
+.credential-actions{display:flex;flex-wrap:wrap;gap:8px;margin-block:16px}
 :root{--live-bg:#0c111b;--live-surface:#121a27;--live-raised:#182232;--live-border:#2b384b;--live-text:#e8edf5;--live-muted:#a7b5c9;--live-accent:#aab7ff;--live-radius:12px}
 .app-layout-live{background:var(--live-bg);color:var(--live-text)}
 .app-layout-live .sidebar{width:208px;min-width:208px;background:var(--live-bg);padding-top:24px}

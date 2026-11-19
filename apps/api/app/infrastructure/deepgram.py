@@ -18,6 +18,7 @@ from urllib.parse import urlencode
 
 from ..application.stt import FeedResult, SpeechAvailability, SpeechFailure, SpeechUnavailable
 from .technical_vocabulary import keyterms_for
+from .windows_credentials import CredentialError, WindowsCredentialStore, resolve_key
 
 KEY_ENV = "COPILOT_DEEPGRAM_API_KEY"
 MAX_TEXT_CHARS = 3000
@@ -55,26 +56,47 @@ def _word_end(alternative: dict[str, Any]) -> float | None:
     return None
 
 
+class DeepgramAvailability(SpeechAvailability):
+    """Expose configuration metadata, never credential values or fingerprints."""
+
+    configured: bool
+    credential_source: str
+    configuration_error: str | None
+
+
 class DeepgramProvider:
     """Explicit cloud STT provider, unavailable unless both runtime and key exist."""
 
-    def __init__(self, environ: Mapping[str, str] | None = None) -> None:
-        settings = os.environ if environ is None else environ
-        self._key = settings.get(KEY_ENV, "").strip()
+    def __init__(self, environ: Mapping[str, str] | None = None,
+                 *, credential_store: WindowsCredentialStore | None = None) -> None:
+        self._settings = os.environ if environ is None else environ
+        self._credentials = credential_store if credential_store is not None else WindowsCredentialStore()
 
-    def availability(self) -> SpeechAvailability:
+    def availability(self) -> DeepgramAvailability:
         installed = _websockets_installed()
-        configured = bool(self._key) and "\n" not in self._key and "\r" not in self._key
+        error = None
+        try:
+            key, source = resolve_key(self._settings, self._credentials)
+            configured = key is not None
+            key = None
+        except CredentialError as failure:
+            configured, source = False, "error"
+            error = "invalid_environment" if str(failure) == "invalid_environment" else "credential_unavailable"
         available = installed and configured
         detail = ("Deepgram Nova-3 streaming is configured; audio is sent to the cloud and may incur charges."
-                  if available else "Deepgram requires the websockets runtime and COPILOT_DEEPGRAM_API_KEY on the API process.")
+                  if available else "Deepgram requires the websockets runtime and a valid backend environment or Windows credential.")
         return {"provider": "deepgram", "available": available, "runtime_installed": installed,
                 "languages": {language: {"available": available} for language in sorted(LANGUAGES)},
-                "detail": detail}
+                "detail": detail, "configured": configured, "credential_source": source,
+                "configuration_error": error}
 
     async def open(self, language: str, *, vocabulary_profile: str = "general") -> DeepgramSession:
         """Open only the fixed Deepgram host; never log or return the API key."""
-        if language not in LANGUAGES or not self.availability()["available"]:
+        try:
+            key, _ = resolve_key(self._settings, self._credentials)
+        except CredentialError:
+            raise SpeechUnavailable("deepgram_configuration_invalid") from None
+        if language not in LANGUAGES or not _websockets_installed() or key is None:
             raise SpeechUnavailable("deepgram_unavailable")
         from websockets.asyncio.client import connect
 
@@ -86,7 +108,7 @@ class DeepgramProvider:
         try:
             connection = await connect(
                 url,
-                additional_headers={"Authorization": f"Token {self._key}"},
+                additional_headers={"Authorization": f"Token {key}"},
                 open_timeout=10,
                 close_timeout=2,
                 max_size=65536,
@@ -96,6 +118,8 @@ class DeepgramProvider:
             )
         except Exception:
             raise SpeechFailure("deepgram_connect_failed") from None
+        finally:
+            key = None
         return DeepgramSession(connection)
 
 

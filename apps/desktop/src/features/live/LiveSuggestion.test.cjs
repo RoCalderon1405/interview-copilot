@@ -27,8 +27,21 @@ const {LiveWorkspace} = load('LiveWorkspace.tsx', {
   '../../i18n':i18n,
   './liveState': {initialLiveState,receiveLiveEvent,restoreLiveState},
 });
-const {default:App} = load('../../App.tsx', {'./api':{api:{}},'./features/live/LiveWorkspace':{LiveWorkspace},'./i18n':i18n});
+const {DeepgramSettings}=load('../settings/DeepgramSettings.tsx', {'../../api':{api:{}},'../../i18n':i18n});
+const {default:App} = load('../../App.tsx', {'./api':{api:{}},'./features/live/LiveWorkspace':{LiveWorkspace},'./features/settings/DeepgramSettings':{DeepgramSettings},'./i18n':i18n});
 const render = item => renderToStaticMarkup(React.createElement(LiveSuggestion,{item}));
+test('Deepgram Settings never renders a credential input and explains Windows entry and independent consent in EN/ES',()=>{
+  try{
+    for(language of ['en','es']){
+      const html=renderToStaticMarkup(React.createElement(DeepgramSettings));
+      assert.match(html,/Deepgram/);assert.match(html,/Vosk/);
+      assert.match(html,language==='en'?/Configure key/:/Configurar clave/);
+      assert.match(html,language==='en'?/Never enter your Windows password/:/Nunca introduzcas tu contraseña de Windows/);
+      assert.match(html,language==='en'?/not configured|unconfirmed/:/sin confirmar/);
+      assert.doesNotMatch(html,/<input|<textarea|type="password"|localStorage/);
+    }
+  }finally{language='es';}
+});
 function renderState(view) {
   const {LiveWorkspace:Workspace}=load('LiveWorkspace.tsx',{
     '../../api':{api:{}},'./LiveSuggestion':{LiveSuggestion},'../../i18n':i18n,

@@ -10,13 +10,15 @@ const { pathToFileURL } = require('node:url');
 const DEV = 'http://127.0.0.1:5173';
 const DIST = pathToFileURL(path.join(__dirname, '../dist/index.html')).href;
 function boot({packaged=false, platform='win32', trayFails=false, opaqueWindow=false, transparentFails=false,
-  backgroundFails=false, workArea={x:0,y:0,width:1920,height:1080}}={}) {
+  backgroundFails=false, captureAllowed=true, workArea={x:0,y:0,width:1920,height:1080}}={}) {
   const handles = new Map();
   const listeners = new Map();
   const windows=[];
   const trays=[];
   const timers=new Set();
   let now=0;
+  const credentialCalls=[];
+  const credentials={busy:false,run:async(action,_win,language)=>{credentialCalls.push({action,language});return {result:'status',stored:false};},cancel:()=>credentialCalls.push({action:'cancel'})};
   class Contents extends EventEmitter {
     constructor(){super();this.mainFrame={url:''};this.sent=[];this.session={setPermissionCheckHandler:fn=>{this.check=fn;},setPermissionRequestHandler:fn=>{this.request=fn;},setDisplayMediaRequestHandler:fn=>{this.display=fn;}};this.destroyed=false;}
     isDestroyed(){return this.destroyed;}
@@ -59,8 +61,8 @@ function boot({packaged=false, platform='win32', trayFails=false, opaqueWindow=f
     destroy(){this.destroyed=true;}
   }
   const electron={app:{isPackaged:packaged,whenReady:()=>Promise.resolve(),on(){},quit(){}},BrowserWindow:Window,screen:{getDisplayMatching:()=>({workArea})},Tray:RecoveryTray,Menu:{buildFromTemplate:items=>items},nativeImage:{createFromBitmap:()=>({isEmpty:()=>false})},desktopCapturer:{getSources:async()=>[{id:'screen:1:0'}]},ipcMain:{handle:(name,fn)=>handles.set(name,fn),on:(name,fn)=>listeners.set(name,fn)}};
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'main.cjs'),'utf8'),{__dirname,URL,Buffer,Date:{now:()=>now},setInterval:fn=>{timers.add(fn);return {fn,unref(){}};},clearInterval:timer=>timers.delete(timer.fn),process:{platform,env:opaqueWindow?{COPILOT_OPAQUE_WINDOW:'1'}:{}},require:id=>id==='electron'?electron:require(id)}, {filename:'main.cjs'});
-  return new Promise(resolve=>setImmediate(()=>resolve({handles,listeners,windows,trays,timers,window:windows[0],advance:ms=>{now+=ms;for(const fn of timers)fn();}})));
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'main.cjs'),'utf8'),{__dirname,URL,Buffer,Date:{now:()=>now},setInterval:fn=>{timers.add(fn);return {fn,unref(){}};},clearInterval:timer=>timers.delete(timer.fn),process:{platform,env:opaqueWindow?{COPILOT_OPAQUE_WINDOW:'1'}:{}},require:id=>id==='electron'?electron:id==='./credentials.cjs'?{createCredentials:()=>credentials,captureGuard:()=>async()=>captureAllowed}:require(id)}, {filename:'main.cjs'});
+  return new Promise(resolve=>setImmediate(()=>resolve({handles,listeners,windows,trays,timers,credentials,credentialCalls,window:windows[0],advance:ms=>{now+=ms;for(const fn of timers)fn();}})));
 }
 const e=win=>({sender:win.webContents,senderFrame:win.webContents.mainFrame});
 const invoke=(h,name,...args)=>h.handles.get('copilot:'+name)(e(h.window),...args);
@@ -313,4 +315,25 @@ test('generated event is allowlisted, bounded and cannot carry documentary prove
   assert.equal(h.window.webContents.sent.at(-1).data.type,'generated_suggestion');
   for(let i=0;i<100;i++) publish(e(c),generated());
   assert.equal(invoke(h,'live-state').events.length,80);
+});
+
+test('credential IPC authenticates the frame, allowlists actions and excludes capture preparation',async()=>{
+  const h=await boot();
+  const handler=h.handles.get('copilot:deepgram-credentials');
+  assert.throws(()=>handler({sender:{},senderFrame:h.window.webContents.mainFrame},'delete'),/Untrusted IPC/);
+  assert.throws(()=>handler({...e(h.window),senderFrame:{url:DEV}},'delete'),/Untrusted IPC/);
+  assert.equal((await invoke(h,'deepgram-credentials',{key:'fictitious'})).result,'error');
+  assert.equal(h.credentialCalls.length,0);
+  assert.equal((await invoke(h,'deepgram-credentials','status')).stored,false);
+  h.credentials.busy=true;assert.equal(invoke(h,'live-open'),false);h.credentials.busy=false;
+  invoke(h,'live-open');
+  assert.equal((await invoke(h,'deepgram-credentials','delete')).result,'busy');
+  assert.equal(h.credentialCalls.length,1);
+});
+
+test('native capture denies media before enumeration when credential editing holds the guard',async()=>{
+  const h=await boot({captureAllowed:false});invoke(h,'live-open');const win=h.windows[1];
+  let granted;
+  await win.webContents.display({frame:win.webContents.mainFrame,userGesture:true},value=>{granted=value;});
+  assert.equal(JSON.stringify(granted),'{}');
 });

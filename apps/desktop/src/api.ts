@@ -15,6 +15,7 @@ async function request<T>(route: string, init?: RequestInit): Promise<T> {
 }
 const json = (body: unknown) => ({ headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), method: 'POST' });
 export const api = {
+  liveStatus: () => request<{providers?:{deepgram?:{configured?:boolean;credential_source?:string;configuration_error?:string|null}}}>('/live/status'),
   health: () => request<{status: string}>('/health'),
   documents: () => request<{documents: DocumentRecord[]}>('/documents'),
   upload: (file: File) => { const data = new FormData(); data.append('file', file); return request<{id: string; name: string; entry_count: number}>('/documents', { method: 'POST', body: data }); },

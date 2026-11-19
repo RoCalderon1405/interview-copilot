@@ -3,8 +3,10 @@
 const { app, BrowserWindow, ipcMain, desktopCapturer, Tray, Menu, nativeImage, screen } = require('electron');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+const {createCredentials,captureGuard}=require('./credentials.cjs');
 const DEV_ORIGIN = 'http://127.0.0.1:5173';
 const isDev = !app.isPackaged;
+const credentials=createCredentials({root:path.resolve(__dirname,'../../..'),enabled:isDev && process.platform==='win32'});
 const productionHref = pathToFileURL(path.join(__dirname, '../dist/index.html')).href;
 let mainWindow;
 let captureWindow;
@@ -219,7 +221,7 @@ function emitLive(event) {
 function openLiveCapture() {
   // Production file:// origins are intentionally not allowed by the local WS backend.
   // Only the verified Vite-origin development pipeline is enabled in this milestone.
-  if (!isDev || process.platform !== 'win32') return false;
+  if (!isDev || process.platform !== 'win32' || credentials.busy) return false;
   if (captureWindow && !captureWindow.isDestroyed()) {
     restoreWindow(captureWindow); return true;
   }
@@ -235,6 +237,7 @@ function openLiveCapture() {
     },
   });
   const current = captureWindow;
+  const reserveCapture=captureGuard(credentials,current);
   capturePhase = 'idle'; captureAttempt = 0; hideAllowed = true;
   // Separate session: the production renderer continues to deny media permissions.
   current.webContents.session.setDisplayMediaRequestHandler(async (request, callback) => {
@@ -243,6 +246,7 @@ function openLiveCapture() {
           request.userGesture !== true || !trustedCapture({sender:current.webContents,senderFrame:request.frame})) {
         callback({}); return;
       }
+      if (!await reserveCapture() || current.isDestroyed()) {callback({});return;}
       const sources = await desktopCapturer.getSources({types:['screen'], thumbnailSize:{width:0,height:0}});
       callback(sources.length ? {video:sources[0],audio:'loopback'} : {});
     } catch { callback({}); }
@@ -313,11 +317,19 @@ function createWindow() {
   mainWindow.on('close', () => {
     // A hidden capture window must not keep the application/audio alive on its own.
     quitting = true;
+    credentials.cancel();
     restoreTaskbar();
     if (captureWindow && !captureWindow.isDestroyed()) captureWindow.close();
   });
 }
 app.whenReady().then(() => {
+  ipcMain.handle('copilot:deepgram-credentials', (event, action) => {
+    const win=trustedWindow(event);
+    if(!['status','configure','replace','delete'].includes(action))return {result:'error',stored:null};
+    if(action!=='status' && captureWindow && !captureWindow.isDestroyed())return {result:'busy',stored:null};
+    return credentials.run(action,win,uiLanguage);
+  });
+  ipcMain.handle('copilot:deepgram-cancel',event=>{trustedWindow(event);credentials.cancel();return true;});
   ipcMain.handle('copilot:window-state', event => {
     const win = trustedWindow(event);
     return windowState(win);
@@ -392,5 +404,5 @@ app.whenReady().then(() => {
   createWindow();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
-app.on('before-quit', () => { quitting = true; restoreTaskbar(); });
+app.on('before-quit', () => { quitting = true; credentials.cancel(); restoreTaskbar(); });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

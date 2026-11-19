@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="254" height="28" viewBox="0 0 254 28" role="img" aria-labelledby="title">
+  <title id="title">Desktop: Electron, React and TypeScript</title>
+  <rect x="0.5" y="0.5" width="253" height="27" rx="6" fill="#0c111b" stroke="#40506a"/>
+  <g fill="none" stroke="#aab7ff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="10" y="7" width="18" height="12" rx="2"/>
+    <path d="M15 23h8m-4-4v4"/>
+  </g>
+  <text x="38" y="18" fill="#e8edf5" font-family="Segoe UI,Arial,sans-serif" font-size="12">Electron · React · TypeScript</text>
+</svg>

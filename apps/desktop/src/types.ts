@@ -9,6 +9,7 @@ export type GenerationFailureCode = 'disabled' | 'not_configured' | 'invalid_inp
   'timeout' | 'invalid_response' | 'provider_error';
 export type LiveWindowState = {available:boolean; protected:boolean; alwaysOnTop:boolean;
   mode:'compact' | 'expanded'; backgroundOpacity:number; transparencyAvailable:boolean; customFrame:boolean};
+export type DeepgramKeyResult = {result:'status'|'configured'|'deleted'|'cancelled'|'conflict'|'busy'|'error'|'unsupported'|'timed_out'; stored:boolean|null};
 
 export type LiveEvent =
   | {type: 'status'; text: string}
@@ -27,6 +28,8 @@ export type LiveEvent =
 declare global {
   interface Window {
     copilotDesktop?: {
+      manageDeepgramKey(action:'status'|'configure'|'replace'|'delete'): Promise<DeepgramKeyResult>;
+      cancelDeepgramKey(): Promise<boolean>;
       getWindowState(): Promise<LiveWindowState>;
       setLiveMode(mode: 'compact' | 'expanded'): Promise<LiveWindowState | false>;
       setLiveOpacity(opacity: number): Promise<LiveWindowState | false>;

@@ -1,26 +1,70 @@
 # Interview Copilot
 
-A Windows desktop workspace for technical interview preparation and consent-based Live assistance in English and Spanish.
+**Your interview knowledge, in a focused Windows workspace.**
 
-Live Mode transcribes system audio, detects interview questions and retrieves answers from your documents. Optional Ollama suggestions are separate, unverified and disabled by default. **Development preview:** integrated Windows acceptance is incomplete; packaged audio capture is disabled.
+Interview Copilot is a desktop application for technical interview preparation and consent-based Live assistance in English and Spanish. It transcribes system audio, detects interview questions and retrieves document-backed answers, keeping optional AI suggestions visibly separate from evidence.
 
-## Features
+![Electron, React and TypeScript](docs/images/badges/desktop.svg)
+![Python and FastAPI](docs/images/badges/backend.svg)
+![SQLite and FTS5](docs/images/badges/storage.svg)
 
-- **Live workspace:** answer-focused dark layout, newest-first transcripts, replaceable interim text and independently scrollable feeds. Compact capture controls keep diagnostics folded away.
-- **Document-backed answers:** exact Q&A first, optional semantic candidates for review, and explicit no-evidence results.
-- **Selectable STT:** Vosk by default; optional local Faster-Whisper or Deepgram Nova-3 cloud streaming. No automatic provider switching.
-- **Knowledge Base:** import XLSX, DOCX, PDF, TXT and Markdown; search manually and manage local documents.
+> **Windows development preview.** Live system-audio capture is development-only; packaged capture is disabled. Integrated Windows and conferencing acceptance remains incomplete. This is not a production-ready release.
+
+[Features](#implemented-features) · [Screenshots](#live-workspace) · [Architecture](#architecture) · [Quick start](#windows-setup-cmd) · [Privacy](#privacy-security-and-limitations)
+
+## Implemented features
+
+- **Focused Live workspace:** expanded transcript and Q&A panels, a compact overlay and stable question cards enriched by correlated results; EN/ES interface controls.
+- **Evidence-first answers:** normalized exact Q&A with sources, optional semantic Q&A labeled for review, then an explicit no-evidence result. Opt-in Ollama suggestions remain unverified and source-free.
+- **Explicit STT selection:** local Vosk by default, optional local Faster-Whisper or Deepgram Nova-3 cloud streaming; no automatic provider switching.
+- **Local Knowledge Base:** import XLSX, DOCX, PDF, TXT and Markdown; manage documents and search manually without invoking an LLM.
 - **Basic Practice:** document questions, keyword-based feedback and session reports—not an AI assessment of technical correctness.
 
-## Tech stack
+## Live workspace
 
-Electron 39 · React 19 · TypeScript · Vite · Python/FastAPI · SQLite/FTS5 · Vosk. Optional integrations: Faster-Whisper, FastEmbed, Deepgram and local Ollama. No vector database service is required.
+**Actual Electron renderings with synthetic interview data and a mocked desktop bridge.** Connection, listening, transcript and answer states are simulated. No audio capture, backend, provider or model was used; these images do not validate native transparency or end-to-end behavior.
+
+### Expanded mode
+
+Transcript alongside a continuous Q&A queue, with document sources and unverified AI clearly distinguished.
+
+![Expanded Live workspace with synthetic dependency-injection and cache-expiration questions](docs/images/live-expanded.png)
+
+### Compact mode
+
+The same Q&A queue in a narrower, answer-first layout; transcript access remains available below the queue.
+
+<img src="docs/images/live-compact.png" alt="Compact Electron Live workspace with the same synthetic Q&amp;A cards" width="360">
+
+## Technology stack
+
+- **Desktop:** Electron 39, React 19, TypeScript, Vite and Lucide icons. The main renderer is sandboxed; audio capture uses an isolated window.
+- **Backend and storage:** Python, FastAPI, Uvicorn and SQLite/FTS5. Documents and indexes stay local; no vector database service is required.
+- **Speech:** Vosk is the local default. Faster-Whisper (local CPU INT8) and Deepgram Nova-3 (cloud) are optional.
+- **Retrieval and generation:** optional FastEmbed semantic Q&A and opt-in local Ollama suggestions, disabled by default. Models and optional runtimes require separate setup; nothing switches providers automatically.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Audio["Windows system audio"] --> Capture["Isolated capture window - explicit consent"]
+    Capture -->|"PCM over local WebSocket"| API["FastAPI - STT, question detection, retrieval"]
+    Capture -->|"Validated events via Electron IPC"| UI["Sandboxed React workspace"]
+    API -->|"Transcript and answer events"| Capture
+    UI -->|"Local HTTP - documents and manual search"| API
+    API --> Store["Local documents and SQLite / FTS5"]
+    API --> Local["Local STT - Vosk or optional Faster-Whisper"]
+    API -.->|"Optional cloud STT - separate consent"| Cloud["Deepgram Nova-3"]
+    API -.->|"Opt-in unverified suggestions"| LLM["Local Ollama"]
+```
+
+The backend owns provider access and credentials. React receives bounded Live events, never raw audio or keys. See [architecture and security boundaries](docs/architecture.md) for module responsibilities and lifecycle details.
 
 ## Windows setup (CMD)
 
-Prerequisites: Windows, Python, Node.js/npm and local Vosk models. **Existing users:** reuse your working `.venv`, database, documents and model caches. Do not reinstall or reindex just to validate a change.
+Prerequisites: Windows, Python, Node.js/npm and local Vosk models. **Existing users:** reuse your working environment, database, documents and model caches; do not reinstall or reindex for validation.
 
-For a first installation, from the repository root:
+First installation, from the repository root:
 
 ```bat
 py -3 -m venv .venv
@@ -29,7 +73,7 @@ cd apps\desktop
 npm install
 ```
 
-Dependencies and models are not bundled. Place the English and Spanish Vosk models in `local-data\models`, or set `COPILOT_MODELS_DIR`. See [configuration and optional providers](docs/setup.md) for model folder names, storage paths, semantic indexing, Whisper, Deepgram and Ollama. The backend reads process environment variables; it does **not** automatically load `.env`.
+Place the English and Spanish Vosk model folders in `local-data\models`, or set `COPILOT_MODELS_DIR`. Dependencies and models are not bundled or downloaded automatically. See [setup](docs/setup.md) for exact model names, storage paths and optional providers.
 
 Start the backend from the repository root:
 
@@ -37,51 +81,29 @@ Start the backend from the repository root:
 dev-api.bat
 ```
 
-In a second terminal, also from the repository root:
+In a second terminal, from the repository root:
 
 ```bat
 cd apps\desktop
 npm run dev
 ```
 
-The API runs at `http://127.0.0.1:8765` and the development UI at `http://127.0.0.1:5173`. Check `/health` and `/live/status` if startup fails. Do not start a second backend or leave the standalone transcription lab using the same ports.
+The API listens at `http://127.0.0.1:8765`; Vite uses `http://127.0.0.1:5173`. Import Q&A documents in **Knowledge Base**, open **Live Interview**, then authorize capture with a real click inside the isolated audio window. Interface language and transcription language are separate settings. See the [Live guide](docs/live-mode.md) for controls, tray recovery and acceptance checks.
 
-## Usage
+## Privacy, security and limitations
 
-1. Import interview Q&A documents in **Knowledge Base**. Semantic indexing is optional and explicit.
-2. Choose **EN/ES** with the **Interface language / Idioma de interfaz** selector. It switches immediately and saves only the interface preference; STT and LLM languages do not change. Spanish is the default. Open **Live Interview / Entrevista en vivo → Prepare capture / Preparar captura**.
-3. In the isolated audio window, select a provider/language, review consent and click **Iniciar transcripción**. Cloud STT requires separate consent.
-4. Expanded Live shows transcript on the left (~35%) and a continuous newest-first question/answer queue on the right (~65%), with independent scrolling. Compact prioritizes the same queue. Each question has one card, updated in place by correlated documentary/AI/failure results; previous cards remain below, without a separate answer-history section. Documentary absence and unverified, source-free AI stay distinctly labeled within the same card. No received AI result does not mean generation has started or completed. Finalized transcript entries have no visible Final badge; interim text keeps a subtle listening indicator. Exact answers retain their sources; semantic and LLM suggestions require review. **Consulta manual** searches documents without invoking Ollama.
-5. Once capture is ready, the auxiliary window hides and both windows leave the Windows taskbar if a recovery tray icon can be created. The main workspace stays visible. Click the **Interview Copilot tray icon** (possibly in Windows' overflow area) to restore it after minimizing; its context menu also shows audio controls or stops/closes capture. **Mostrar controles / Show controls** reopens the same auxiliary window without restarting audio. **Detener y cerrar / Stop and close** restores normal taskbar behavior.
+- **Capture scope:** system-audio capture includes **all Windows output**, not one selected application. Obtain participants' consent and follow organizational policies. The main renderer has no capture permissions.
+- **Local data:** Live audio and transcripts are not persisted; in-memory histories are bounded, not a session archive. Imported documents and basic Practice answers are stored locally.
+- **Cloud privacy and keys:** Deepgram sends audio off-device, requires separate informed consent, may incur charges and has its own processing/retention policies. Windows development Settings supports native key entry and Credential Manager storage; the backend environment override remains supported and takes priority. See the [setup guide](docs/setup.md#optional-deepgram-nova-3). `.env` is not loaded automatically. Never put keys in React, tracked files or screenshots.
+- **Screen sharing:** main-window exclusion is **best effort**, never proof of invisibility. The auxiliary audio window is not protected; Teams, Zoom and Google Meet exclusion remains unverified.
+- **Accuracy and acceptance:** STT and question detection can miss or combine speech. Full Spanish, latency, stop/restart, overlay and capture-continuity acceptance is pending. AI can invent claims; **AI-001C quality is not accepted**. Review all suggestions. Scanned-PDF OCR is not implemented; see [document-format limits](docs/setup.md#documents-and-retrieval).
 
-If PCM stops advancing or the audio context stops running, controls and taskbar buttons are restored; automatic hiding stays disabled for that capture attempt. This is a recovery safeguard, not proof of healthy transcription. Hidden audio continuity, tray recovery and actual Windows/taskbar/conferencing behavior still require owner acceptance.
-
-Use **Modo compacto / Compact mode** and **Expandir / Expand** to switch the same Live window without restarting capture or losing the current workspace. Each mode remembers its position/size until app exit. **Siempre visible / Always on top** shows confirmed **Activado/Desactivado / On/Off**; an unconfirmed result is not shown as Off. Open **Aspecto del overlay / Overlay appearance** immediately below Live's mode/capture controls; it is visible in both modes. Its **Opacidad en modo compacto / Compact-mode opacity** slider adjusts only the compact dark background (80–100%); text stays opaque and expanded mode stays opaque. Choose **Fondo opaco / Opaque background** to resize manually or if translucency looks unreliable. After native-code updates, fully close and restart Electron; Vite reload alone cannot update main/preload. For a normal opaque native frame at startup, set `COPILOT_OPAQUE_WINDOW=1` before launching Electron; see [fallback setup](docs/setup.md#opaque-window-fallback-ui-004). Real Windows visual transparency and capture continuity across these changes remain pending acceptance.
-
-Use **Practice Interview** for the existing question-and-keyword-feedback workflow. See the [Live acceptance guide](docs/live-mode.md) for detailed checks.
-
-## Important limitations
-
-- Capture includes **all Windows output**, not just one application. The main renderer cannot capture media; authorization must happen inside the isolated audio window. Respect participants' consent and organizational policies.
-- The application does not persist Live audio or transcripts. Documents and basic Practice answers are stored locally. Deepgram sends audio off-device, may incur charges, and has its own processing/retention policies. Credentials stay in the backend environment.
-- Main-window screen-sharing exclusion is **best effort**. The auxiliary audio window is not protected. Teams, Zoom and Google Meet exclusion remains unverified.
-- STT and question detection can miss or combine speech. Complete Spanish, latency, interruption and restart acceptance is pending.
-- Ollama can invent experience, metrics or technical claims. Its conservative checks can also reject valid answers. **AI-001C is not accepted for quality**; human review remains necessary.
-- Live histories are bounded and memory-only, not a complete session archive. A successful build does not create a Windows installer.
-
-### Documents and retrieval
-
-Importing a supported file does not guarantee extracted Q&A. Scanned PDFs require OCR, which is not implemented; PDF fragments are not automatic Live answer candidates. Manual search uses exact/lexical retrieval, while automatic Live uses exact Q&A followed by optional semantic Q&A. See [format details](docs/setup.md#documents-and-retrieval).
-
-## Development checks
-
-Use the existing environment. Run focused tests first, then the relevant regressions described in [AGENTS.md](AGENTS.md). Do not run real-model benchmarks for documentation or test cleanup. Models, private data, credentials and dependency/cache folders must stay out of Git.
+**CLOUD-001:** Windows development key management is implemented; owner Windows acceptance is pending. Priorities belong in the [roadmap](docs/roadmap.md); actual acceptance evidence belongs in [Live Mode validation](docs/live-mode.md).
 
 ## Documentation
 
-- [Configuration and optional integrations](docs/setup.md)
-- [Architecture and security boundaries](docs/architecture.md)
-- [Visual design reference](DESIGN.md)
-- [Live validation evidence and known limitations](docs/live-mode.md)
-- [Roadmap](docs/roadmap.md) · [Technical vocabulary profiles](docs/technical-vocabulary.md)
+- [Setup and optional integrations](docs/setup.md) · [Architecture](docs/architecture.md)
+- [Roadmap](docs/roadmap.md) · [Validation evidence and known limitations](docs/live-mode.md)
+- [Visual design reference](DESIGN.md) · [Technical vocabulary](docs/technical-vocabulary.md)
 - [Audio lab](docs/audio-lab.md) · [Transcription lab](docs/transcription-lab.md)
+- [Development rules and regression commands](AGENTS.md)

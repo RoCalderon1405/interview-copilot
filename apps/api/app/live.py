@@ -39,6 +39,7 @@ from .live_generation import LiveGeneration
 from .store import KnowledgeStore
 from .textnorm import normalize
 from .infrastructure.technical_vocabulary import VocabularyProfile
+from .infrastructure.windows_credentials import CredentialError, CredentialGate
 
 Language = Literal["en-US", "es-MX"]
 Provider = Literal["vosk", "faster-whisper", "deepgram"]
@@ -915,7 +916,14 @@ async def live_transcribe(websocket: WebSocket):
         await websocket.accept()
         await _fail(websocket, "busy", "Another Live transcription connection is active", 1013)
         return
+    credential_lease = None
     try:
+        try:
+            credential_lease = CredentialGate(exclusive=False)
+        except CredentialError:
+            await websocket.accept()
+            await _fail(websocket, "credentials_busy", "Credential management is active or its capture guard is unavailable", 1013)
+            return
         await websocket.accept()
         _diagnostic("ws.accepted")
         try:
@@ -951,4 +959,6 @@ async def live_transcribe(websocket: WebSocket):
                     runtime.transcriptions.pop(websocket.state.session_id, None)
                     control.closed.set()
                 runtime.release_connection()
+                if credential_lease is not None:
+                    credential_lease.close()
                 _diagnostic("cleanup.complete")
