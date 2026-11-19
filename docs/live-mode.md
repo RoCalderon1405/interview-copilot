@@ -415,6 +415,14 @@ The Q&A queue starts each card from a documentary event and correlates updates b
 
 **VALIDATED:** 19 relevant deterministic UI tests and TypeScript/Vite build passed. One focused EN/ES regression checks noncollapsible/visible expanded markup, labeled compact access to the mounted feed, and absence of the Q&A ordering caption. Existing queue/correlation, ordering, transcript, provenance, lifecycle and capture-control tests still pass. Only UI tests and build were rerun; no new native Windows/audio/visual acceptance is claimed. Existing Vite classic-script warnings remain. Earlier rendered/native evidence and pending Windows checks retain their original scope.
 
+### Maintenance cleanup — verified unused presentation paths
+
+**IMPLEMENTED:** removed five unused Live CSS selectors and 13 obsolete EN/ES dictionary pairs after checking React, capture HTML/scripts, backend text and test consumers. General Knowledge/Practice hints, manual-lookup labels and the compact transcript's active `[hidden]` rule remain. `LiveSuggestion` now accepts only the documentary card plus optional correlated AI, removing the unused hidden-question option and standalone-AI rendering branch. Existing AI/provenance and seven failure-reason tests now exercise the actual correlated queue flow; no test cases were deleted. The unused `token` argument was removed from the integration-test connection helper, not from its explicit authenticated start messages.
+
+**VALIDATED:** 26 focused backend integration tests, 19 UI tests and 13 audio/capture-script tests passed; Electron syntax lint, TypeScript/Vite build and diff validation passed. A separate before/after SSR comparison against `ea8dced` found byte-for-byte identical markup for 32 supported EN/ES card variants. No backend production, reducer, IPC, capture, window or credential-handling code changed. Documentation now describes late correlated failures correctly and links task status/evidence instead of duplicating them in architecture.
+
+**LIMITS:** all checks used deterministic synthetic inputs/fakes, not real models or audio. No full backend/native Electron suite, Windows visual/network/conferencing acceptance or benchmarks were repeated. Existing Starlette/httpx deprecation and Vite classic-script warnings remain; no dependencies were installed. CLOUD-001 stays planned and environment-only key configuration is unchanged. Earlier acceptance limits and scoped owner evidence remain in force.
+
 ## Screen-sharing exclusion — manual acceptance pending
 
 Exclusion while remaining visible locally is a core Live requirement. The main window enables Electron `setContentProtection` by default on Windows; Settings permits toggling it and always-on-top. Compact mode reuses the same main window, not a separate overlay or stronger exclusion mechanism. The capture-controls window is not content-protected.

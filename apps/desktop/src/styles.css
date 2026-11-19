@@ -54,7 +54,6 @@
 .live-transcript>.live-feed-scroll[hidden]{display:none}
 .live-results .panel-title{padding:16px 20px;margin:0;border-bottom:1px solid var(--live-border);flex-shrink:0;color:var(--live-muted)}
 .live-results h2{color:var(--live-text);font-size:14px;margin:0 0 4px}
-.live-results .hint{display:block;font-size:12px;line-height:1.5;color:var(--live-muted)}
 /* Native anchoring keeps older entries in view when new items are prepended. */
 .live-feed-scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding:20px;overflow-anchor:auto;scrollbar-color:#4b5c76 var(--live-surface)}
 .live-feed-scroll:focus-visible{outline:2px solid var(--live-accent);outline-offset:-3px}
@@ -69,7 +68,6 @@
 .live-interim-label{display:flex;align-items:center;gap:7px;color:#b9cdff;font-size:12px;line-height:1.5}
 .live-listening-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0}
 .live-partial{background:var(--live-raised);border:1px dashed #5b7192;border-radius:8px;padding:12px;overflow-anchor:none}
-.live-partial .live-entry-label{color:#b9cdff}
 .live-partial p{color:#c4d1e7}
 .live-result{--result-accent:#8fd8b4;border:1px solid var(--live-border);border-left:1px solid var(--result-accent);background:var(--live-raised);border-radius:10px;padding:20px;margin-bottom:16px;display:grid;gap:12px;overflow-wrap:anywhere}
 .live-result:last-child{margin-bottom:0}
@@ -122,19 +120,16 @@ html.live-overlay,html.live-overlay body,html.live-overlay #root{background:tran
 .live-pin[data-state=off]{border-style:dashed}
 .live-pin[data-state=unknown] .live-pin-copy strong{font-weight:400}
 .live-background-controls{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;font-size:12px;color:var(--live-muted)}
-.live-background-controls[hidden]{display:none}
 .live-background-controls label{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .live-background-controls input{accent-color:#aab7ff;width:110px;min-height:36px}
 .live-background-controls output{font-variant-numeric:tabular-nums}
 .live-background-controls>span{flex-basis:100%}
-.live-appearance[hidden]{display:none}
 .live-workspace .live-appearance{padding:0;flex-shrink:0}
 .live-appearance>summary{padding:12px 16px;color:var(--live-muted);font-size:13px;font-weight:600;cursor:pointer}
 .live-appearance .live-background-controls{padding:0 12px 12px}
 .live-current{padding:0;overflow:hidden}
 .live-current .panel-title{padding:14px 20px;border-bottom:1px solid var(--live-border);margin:0;display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
 .live-current h2{font-size:14px;margin:0;color:var(--live-text)}
-.live-current .hint{font-size:12px;color:var(--live-muted)}
 .live-current-feed{padding:20px;flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;overflow-anchor:auto;scrollbar-gutter:stable;scrollbar-color:#4b5c76 var(--live-surface)}
 .live-current-feed:focus-visible{outline:2px solid var(--live-accent);outline-offset:-3px}
 .live-current-question{font-size:20px;font-weight:650;line-height:1.5;margin:0 0 16px;overflow-wrap:anywhere;white-space:pre-wrap;max-width:65ch}

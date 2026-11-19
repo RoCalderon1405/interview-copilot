@@ -68,7 +68,7 @@ def session(client, language="en-US"):
     return sid, token
 
 
-def start(client, token):
+def start(client):
     ws = client.websocket_connect('/live/transcribe', headers={"origin": "http://localhost:5173"})
     return ws
 
@@ -97,7 +97,7 @@ def test_eligible_final_generates_correlated_additive_event(tmp_path, language, 
     app.state.live.models = Models(FeedResult(final=question))
     with TestClient(app) as client:
         sid, token = session(client, language)
-        with start(client, token) as ws:
+        with start(client) as ws:
             ws.send_json({"type": "start", "token": token})
             assert ws.receive_json()['type'] == 'ready'
             documentary = receive_final(ws)
@@ -134,7 +134,7 @@ def test_documentary_priority_and_opt_in_gate(tmp_path, kind):
     app.state.live.models = Models(FeedResult(final=question))
     with TestClient(app) as client:
         sid, token = session(client)
-        with start(client, token) as ws:
+        with start(client) as ws:
             ws.send_json({"type": "start", "token": token})
             ws.receive_json()
             event = receive_final(ws)
@@ -156,7 +156,7 @@ def test_slow_generation_does_not_block_pcm_and_teardown_cancels(tmp_path, endin
     app.state.live.models = Models(FeedResult(final='Explain caching?'))
     with TestClient(app) as client:
         sid, token = session(client)
-        with start(client, token) as ws:
+        with start(client) as ws:
             ws.send_json({"type": "start", "token": token})
             ws.receive_json()
             receive_final(ws)
@@ -184,7 +184,7 @@ def test_generation_failure_keeps_audio_alive(tmp_path, failure, caplog):
     app.state.live.models = Models(FeedResult(final='Explain caching?'))
     with TestClient(app) as client:
         sid, token = session(client)
-        with start(client, token) as ws:
+        with start(client) as ws:
             ws.send_json({"type": "start", "token": token})
             ws.receive_json()
             documentary = receive_final(ws)
@@ -218,7 +218,7 @@ def test_content_rejection_keeps_no_evidence_audio_and_teardown_without_retry(
     app.state.live.models = Models(FeedResult(final=question))
     with TestClient(app) as client:
         sid, token = session(client, language)
-        with start(client, token) as ws:
+        with start(client) as ws:
             ws.send_json({'type': 'start', 'token': token})
             assert ws.receive_json()['type'] == 'ready'
             documentary = receive_final(ws)
@@ -241,7 +241,7 @@ def test_partials_never_generate_even_when_repeated(tmp_path):
     app.state.live.models = Models(*[FeedResult(partial='Explain caching?') for _ in range(6)])
     with TestClient(app) as client:
         _, token = session(client)
-        with start(client, token) as ws:
+        with start(client) as ws:
             ws.send_json({"type": "start", "token": token})
             ws.receive_json()
             for _ in range(6):
@@ -261,7 +261,7 @@ def test_invalid_configuration_does_not_prevent_startup(tmp_path, monkeypatch):
         assert client.get('/health').status_code == 200
         sid, token = session(client)
         app.state.live.models = Models(FeedResult(final='Explain caching?'))
-        with start(client, token) as ws:
+        with start(client) as ws:
             ws.send_json({'type':'start', 'token':token})
             assert ws.receive_json()['type'] == 'ready'
             documentary = receive_final(ws)
@@ -344,7 +344,7 @@ def test_newer_final_supersedes_old_generation_without_overwriting(tmp_path, new
     app.state.live.models = Models(FeedResult(final='Explain caching?'), FeedResult(final='What is authentication?'))
     with TestClient(app) as client:
         _, token = session(client)
-        with start(client, token) as ws:
+        with start(client) as ws:
             ws.send_json({"type": "start", "token": token})
             ws.receive_json()
             old = receive_final(ws)
@@ -395,7 +395,7 @@ def test_det003_ignored_and_duplicate_finals_preserve_pending_generation(
         FeedResult(partial='audio continues'), FeedResult(final=new_question))
     with TestClient(app) as client:
         _, token = session(client, language)
-        with start(client, token) as ws:
+        with start(client) as ws:
             ws.send_json({'type':'start', 'token':token})
             assert ws.receive_json()['type'] == 'ready'
             first = receive_final(ws)

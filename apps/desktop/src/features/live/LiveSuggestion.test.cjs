@@ -37,8 +37,11 @@ function renderState(view) {
   return renderToStaticMarkup(React.createElement(Workspace,{showError:()=>{}}));
 }
 test('generated answers show unverified AI provenance, not documentary attribution',()=>{
-  const html=render({type:'generated_suggestion',kind:'ai_generated',question:'Explain caching?',
-    answer:'<script>untrusted</script>',provider:'ollama',model:'local',source:null});
+  const documentary={type:'suggestion',session_id:'s',question_id:'s:1',question:'Explain caching?',
+    status:'no_evidence',answer:null,source:null,match_type:null};
+  const generated={type:'generated_suggestion',kind:'ai_generated',session_id:'s',question_id:'s:1',question:documentary.question,
+    answer:'<script>untrusted</script>',provider:'ollama',model:'local',source:null};
+  const html=renderState(restoreLiveState([documentary,generated],[]));
   assert.match(html,/Sugerencia generada por IA — revisar/);
   assert.match(html,/ollama · local · Sin respaldo documental/);
   assert.match(html,/No verificada/);
@@ -61,7 +64,8 @@ test('no evidence remains visible without a fabricated answer',()=>{
 });
 
 test('each generation failure has a localized reason alongside no_evidence, never an AI answer or source',()=>{
-  const item={type:'suggestion',question:'Original question',status:'no_evidence',answer:null,source:null,match_type:null};
+  const item={type:'suggestion',session_id:'s',question_id:'s:1',question:'Original question',
+    status:'no_evidence',answer:null,source:null,match_type:null};
   const reasons={
     disabled:['desactivada','disabled'], not_configured:['incompleta o inválida','incomplete or invalid'],
     invalid_input:['no cumple los límites','does not meet'], unavailable:['no está disponible','unavailable'],
@@ -72,7 +76,8 @@ test('each generation failure has a localized reason alongside no_evidence, neve
     for(const locale of ['es','en']) {
       language=locale;
       for(const [failure,copy] of Object.entries(reasons)) {
-        const html=renderToStaticMarkup(React.createElement(LiveSuggestion,{item,failure}));
+        const html=renderState(restoreLiveState([item,{type:'generation_failed',
+          session_id:item.session_id,question_id:item.question_id,code:failure}],[]));
         assert.ok(html.includes(copy[locale==='es'?0:1]));
         assert.match(html,/role="status"/);assert.match(html,/Original question/);
         assert.match(html,locale==='es'?/Sin respuesta suficientemente relacionada/:/No sufficiently related answer/);
