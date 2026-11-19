@@ -75,7 +75,8 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         application.state.generation = create_generation_service()
     except GenerationError:
         # Invalid optional configuration must not prevent capture/API startup.
-        application.state.generation = GenerationService()
+        # No provider can run, but retain not_configured rather than reporting disabled.
+        application.state.generation = GenerationService(enabled=True)
     application.include_router(live_router)
 
     @application.get("/health")

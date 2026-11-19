@@ -84,7 +84,7 @@ def stop(ws):
     # Existing final-flush documentary events are preserved, but never generated.
     while True:
         try:
-            assert ws.receive_json()['type'] != 'generated_suggestion'
+            assert ws.receive_json()['type'] not in ('generated_suggestion', 'generation_failed')
         except WebSocketDisconnect:
             break
 
@@ -133,12 +133,15 @@ def test_documentary_priority_and_opt_in_gate(tmp_path, kind):
         app.state.semantic = Semantic()
     app.state.live.models = Models(FeedResult(final=question))
     with TestClient(app) as client:
-        _, token = session(client)
+        sid, token = session(client)
         with start(client, token) as ws:
             ws.send_json({"type": "start", "token": token})
             ws.receive_json()
             event = receive_final(ws)
             assert event['status'] == ('found' if kind in ('exact', 'semantic') else 'no_evidence')
+            if kind in ('disabled', 'unconfigured'):
+                assert ws.receive_json() == dict(type='generation_failed', session_id=sid,
+                    question_id=event['question_id'], code='disabled' if kind == 'disabled' else 'not_configured')
             ws.send_bytes(b'\0\0')
             assert ws.receive_json()['type'] == 'partial'
             stop(ws)
@@ -172,26 +175,30 @@ def test_slow_generation_does_not_block_pcm_and_teardown_cancels(tmp_path, endin
     assert app.state.live.generations == {}
 
 
-@pytest.mark.parametrize('failure', ['unavailable', 'timeout'])
+@pytest.mark.parametrize('failure', ['unavailable', 'timeout', 'provider_error'])
 def test_generation_failure_keeps_audio_alive(tmp_path, failure, caplog):
     app = create_app(tmp_path)
-    provider = Provider(slow=failure == 'timeout', error=GenerationError('unavailable'))
+    provider = Provider(slow=failure == 'timeout', error=RuntimeError('PRIVATE INTERNAL FAILURE')
+                        if failure == 'provider_error' else GenerationError('unavailable'))
     app.state.generation = GenerationService(provider, enabled=True, timeout_seconds=0.01)
     app.state.live.models = Models(FeedResult(final='Explain caching?'))
     with TestClient(app) as client:
-        _, token = session(client)
+        sid, token = session(client)
         with start(client, token) as ws:
             ws.send_json({"type": "start", "token": token})
             ws.receive_json()
-            receive_final(ws)
+            documentary = receive_final(ws)
             assert provider.started.wait(2)
             if failure == 'timeout':
                 assert provider.cancelled.wait(2)
+            assert ws.receive_json() == dict(type='generation_failed', code=failure,
+                session_id=sid, question_id=documentary['question_id'])
             ws.send_bytes(b'\0\0')
             assert ws.receive_json()['type'] == 'partial'
             stop(ws)
     assert len(provider.calls) == 1
     assert 'Explain caching' not in caplog.text
+    assert 'PRIVATE' not in caplog.text
 
 
 def test_content_rejection_keeps_no_evidence_audio_and_teardown_without_retry(
@@ -210,11 +217,14 @@ def test_content_rejection_keeps_no_evidence_audio_and_teardown_without_retry(
     app.state.generation = GenerationService(provider, enabled=True)
     app.state.live.models = Models(FeedResult(final=question))
     with TestClient(app) as client:
-        _, token = session(client, language)
+        sid, token = session(client, language)
         with start(client, token) as ws:
             ws.send_json({'type': 'start', 'token': token})
             assert ws.receive_json()['type'] == 'ready'
-            assert receive_final(ws)['status'] == 'no_evidence'
+            documentary = receive_final(ws)
+            assert documentary['status'] == 'no_evidence'
+            assert ws.receive_json() == dict(type='generation_failed', code='invalid_response',
+                session_id=sid, question_id=documentary['question_id'])
             assert provider.started.wait(2)
             ws.send_bytes(b'\0\0')
             assert ws.receive_json()['type'] == 'partial'
@@ -249,6 +259,15 @@ def test_invalid_configuration_does_not_prevent_startup(tmp_path, monkeypatch):
     assert not app.state.generation.available
     with TestClient(app) as client:
         assert client.get('/health').status_code == 200
+        sid, token = session(client)
+        app.state.live.models = Models(FeedResult(final='Explain caching?'))
+        with start(client, token) as ws:
+            ws.send_json({'type':'start', 'token':token})
+            assert ws.receive_json()['type'] == 'ready'
+            documentary = receive_final(ws)
+            assert ws.receive_json() == dict(type='generation_failed', code='not_configured',
+                session_id=sid, question_id=documentary['question_id'])
+            stop(ws)
 
 
 def test_worker_replaces_pending_and_discards_cancellation_resistant_result():
@@ -345,8 +364,68 @@ def test_newer_final_supersedes_old_generation_without_overwriting(tmp_path, new
             stop(ws)
 
 
+@pytest.mark.parametrize('language,question,aside,repeat,new_question', [
+    ('en-US', 'Explain caching?', 'Can you hear me?', 'Quick question, explain caching?', 'What is authentication?'),
+    ('es-MX', 'Explica la caché?', '¿Me escuchas?', 'Una pregunta, explica la caché?', '¿Qué es la autenticación?'),
+])
+def test_det003_ignored_and_duplicate_finals_preserve_pending_generation(
+        tmp_path, language, question, aside, repeat, new_question):
+    class FirstSlow(Provider):
+        async def generate(self, question, language):
+            self.slow = not self.calls
+            return await super().generate(question, language)
+
+    class CountingStore:
+        def __init__(self, store):
+            self.store = store
+            self.lookups = []
+        def __getattr__(self, name):
+            return getattr(self.store, name)
+        def find_exact_qa(self, query):
+            self.lookups.append(query)
+            return self.store.find_exact_qa(query)
+
+    app = create_app(tmp_path)
+    provider = FirstSlow()
+    app.state.generation = GenerationService(provider, enabled=True)
+    store = CountingStore(app.state.store)
+    app.state.store = store
+    app.state.live.models = Models(FeedResult(final=question), FeedResult(final=aside),
+        FeedResult(partial='audio continues'), FeedResult(final=repeat),
+        FeedResult(partial='audio continues'), FeedResult(final=new_question))
+    with TestClient(app) as client:
+        _, token = session(client, language)
+        with start(client, token) as ws:
+            ws.send_json({'type':'start', 'token':token})
+            assert ws.receive_json()['type'] == 'ready'
+            first = receive_final(ws)
+            assert provider.started.wait(2)
+            for text in [aside, repeat]:
+                ws.send_bytes(b'\0\0' * 1600)
+                assert ws.receive_json() == dict(type='final', text=text, language=language,
+                                                 last_word_end_seconds=None)
+                # A subsequent partial proves the final's detector/retrieval work is done.
+                ws.send_bytes(b'\0\0' * 1600)
+                assert ws.receive_json() == dict(type='partial', text='audio continues', language=language)
+                assert not provider.cancelled.is_set()
+                assert provider.calls == [(question.rstrip('?'), language)]
+                assert store.lookups == [question.rstrip('?')]
+            ws.send_bytes(b'\0\0' * 1600)
+            assert ws.receive_json()['type'] == 'final'
+            newer = ws.receive_json()  # Any extra card/failure above makes this assertion fail.
+            assert newer['type'] == 'suggestion' and newer['question'] == new_question.rstrip('?')
+            assert newer['question_id'] != first['question_id']
+            assert provider.cancelled.wait(2)
+            result = ws.receive_json()
+            assert result['type'] == 'generated_suggestion' and result['question_id'] == newer['question_id']
+            assert store.lookups == [question.rstrip('?'), new_question.rstrip('?')]
+            assert provider.calls == [(question.rstrip('?'), language), (new_question.rstrip('?'), language)]
+            stop(ws)
+
+
 @pytest.mark.parametrize('ending', ['supersede', 'close', 'session_finished'])
-def test_completed_but_unsent_result_is_suppressed(ending):
+@pytest.mark.parametrize('outcome', ['success', 'failure'])
+def test_completed_but_unsent_result_is_suppressed(ending, outcome):
     async def scenario():
         class Store:
             finished = False
@@ -365,6 +444,8 @@ def test_completed_but_unsent_result_is_suppressed(ending):
                 except asyncio.CancelledError:
                     # An obsolete result must still be rejected if cancellation is swallowed.
                     pass
+                if outcome == 'failure':
+                    raise GenerationError('timeout')
                 return GeneratedSuggestion('Obsolete answer.', 'ollama', 'local')
 
         store, service = Store(), Service()

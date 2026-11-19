@@ -46,8 +46,8 @@ class LiveGeneration:
             self._active.cancel()
 
     def submit(self, question: str) -> None:
-        """Schedule only the latest eligible final without awaiting inference."""
-        if self._closed or not self._service.available:
+        """Schedule the latest final; disabled/unconfigured services report without inference."""
+        if self._closed:
             return
         self._pending = (self._revision, question)
         if self._worker is None or self._worker.done():
@@ -65,26 +65,30 @@ class LiveGeneration:
                 if not await self._session_open() or revision != self._revision or self._closed:
                     continue
                 self._active = asyncio.create_task(self._service.generate(question, self._language))
-                result = await self._active
+                try:
+                    result = await self._active
+                except GenerationError as exc:
+                    event = {"type": "generation_failed", "code": exc.code}
+                else:
+                    event = {
+                        "type": "generated_suggestion", "kind": "ai_generated",
+                        "question": question, "language": self._language,
+                        "answer": result.answer, "provider": result.provider,
+                        "model": result.model, "source": None,
+                    }
                 if not await self._session_open():
                     continue
                 async with self._send_lock:
                     if self._closed or revision != self._revision:
                         continue
                     await self._send({
-                        "type": "generated_suggestion", "kind": "ai_generated",
+                        **event,
                         "session_id": self.session_id,
                         "question_id": self.question_id,
-                        "question": question, "language": self._language,
-                        "answer": result.answer, "provider": result.provider,
-                        "model": result.model, "source": None,
                     })
             except asyncio.CancelledError:
                 if self._closed:
                     return
-            except GenerationError:
-                # Keep the existing no-evidence card; capture continues.
-                pass
             except Exception:
                 # Includes disconnect/send failures; never log private payloads.
                 pass

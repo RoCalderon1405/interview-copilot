@@ -275,6 +275,75 @@ def test_det002_preserves_technical_topics_about_display_and_transcription(spoke
     assert detect_questions(spoken_final) == [spoken_final.rstrip("?")]
 
 
+@pytest.mark.parametrize('utterances', [
+    ['Hello?', 'Hi?', 'How are you?', 'How are you doing?', 'Can you hear me?',
+     'Can you hear me now?', 'Can you hear us?', 'Do you hear me?',
+     'Is my microphone working?', 'Is my mic working?', 'Quick question, can you hear me?'],
+    ['¿Hola?', '¿Buenos días?', '¿Cómo estás?', '¿Cómo están?', '¿Me escuchas?',
+     '¿Me oyes?', '¿Me escuchas ahora?', '¿Puedes oírme?', '¿Puedes escucharme?',
+     '¿Funciona mi micrófono?', 'Una pregunta, ¿me escuchas?'],
+])
+def test_det003_ignores_only_complete_greetings_and_audio_checks(utterances):
+    for text in utterances:
+        assert detect_questions(text) == [], text
+        tracker = StablePartialQuestion()
+        assert all(tracker.observe(text) is None for _ in range(PARTIAL_STABILITY_FRAMES)), text
+
+
+@pytest.mark.parametrize('question', [
+    'How are you handling production incidents?',
+    'Can you hear me when the connection drops?',
+    'How would you check whether a microphone works?',
+    'Why can you not hear me?',
+    'Tell me about a conflict with a teammate',
+    '¿Cómo estás manejando los errores?',
+    '¿Puedes escucharme cuando se pierde la conexión?',
+    '¿No me escuchas?',
+    'Cuando diseñas una API, ¿cómo manejas los errores?',
+    'Explica cómo resolverías un conflicto con tu equipo',
+    'Quick question answering systems: how would you test them?',
+    'Una pregunta sin contexto no basta, ¿cómo pedirías aclaraciones?',
+])
+def test_det003_preserves_substantive_near_neighbors_and_context(question):
+    assert detect_questions(question) == [question.rstrip('?')]
+
+
+@pytest.mark.parametrize('question,prefixes', [
+    ('What is authentication?', ['Quick question, ', 'Just a quick question: ', 'One quick question ']),
+    ('¿Qué es la autenticación?', ['Una pregunta, ', 'Sólo una pregunta rápida: ']),
+])
+def test_det003_introductions_share_candidate_and_partial_final_dedupe(question, prefixes):
+    expected = question.rstrip('?')
+    variants = [prefix + question for prefix in prefixes] + [question]
+    dedupe = RecentFinalDedupe(clock=lambda: 0)
+    for index, text in enumerate(variants):
+        assert detect_questions(text) == [expected]
+        assert dedupe.seen(detect_questions(text)[0]) == (index > 0)
+    tracker = StablePartialQuestion()
+    for index in range(PARTIAL_STABILITY_FRAMES):
+        result = tracker.observe(variants[index % len(variants)])
+        assert result == (expected if index == PARTIAL_STABILITY_FRAMES - 1 else None)
+    assert tracker.observe(question) is None  # The same cleaned partial is attempted once.
+
+
+def test_det003_cleanup_keeps_distinct_context_negation_languages_and_quoted_speech():
+    dedupe = RecentFinalDedupe(clock=lambda: 0)
+    for text in ['Quick question, what is C++?', 'Quick question, what is C#?',
+                 'Quick question, what is C?', 'Quick question, why use Redis?',
+                 'Quick question, why not use Redis?',
+                 'Quick question, when designing an API how do you choose a database?',
+                 'Quick question, when designing a CLI how do you choose a database?']:
+        candidate, = detect_questions(text)
+        assert not dedupe.seen(candidate)
+    assert detect_questions('Quick question, what is authentication and what is authorization?') == [
+        'what is authentication', 'what is authorization']
+    assert detect_questions('Una pregunta, explica cómo funciona y por qué necesitamos una caché') == [
+        'explica cómo funciona y por qué necesitamos una caché']
+    for text in ['The document says "Quick question, what is authentication?"',
+                 'El ejemplo dice «Una pregunta, ¿qué es la autenticación?»']:
+        assert detect_questions(text) == []
+
+
 def test_det002_operational_final_is_visible_but_never_retrieved(tmp_path):
     """The original transcript remains visible without a false Q&A card."""
     spoken = "Tell me if you see text appear mid sentence and then the final text"
@@ -723,6 +792,8 @@ def test_ws_contextual_question_is_detected_without_exact_document_match(tmp_pat
             )
             assert suggestion["status"] == "no_evidence"
             assert suggestion["answer"] is None
+            assert websocket.receive_json() == dict(type='generation_failed', code='disabled',
+                session_id=suggestion['session_id'], question_id=suggestion['question_id'])
             websocket.send_text("stop")
             with pytest.raises(WebSocketDisconnect):
                 websocket.receive_json()
@@ -820,6 +891,8 @@ def test_ws_stable_partial_unknown_question_never_emits_early_suggestion(tmp_pat
             final_suggestion = websocket.receive_json()
             assert final_suggestion["type"] == "suggestion"
             assert final_suggestion["status"] == "no_evidence"
+            assert websocket.receive_json() == dict(type='generation_failed', code='disabled',
+                session_id=final_suggestion['session_id'], question_id=final_suggestion['question_id'])
             websocket.send_text("stop")
             with pytest.raises(WebSocketDisconnect):
                 websocket.receive_json()
@@ -935,6 +1008,8 @@ def test_ws_marked_final_preserves_transcript_and_orders_source_backed_suggestio
             assert suggestions[2]["status"] == "no_evidence"
             assert suggestions[2]["answer"] is None
             assert suggestions[2]["source"] is None
+            assert ws.receive_json() == dict(type='generation_failed', code='disabled',
+                session_id=suggestions[2]['session_id'], question_id=suggestions[2]['question_id'])
             ws.send_text("stop")
             with pytest.raises(WebSocketDisconnect):
                 ws.receive_json()
@@ -952,6 +1027,8 @@ def test_final_unknown_question_returns_no_evidence(tmp_path):
             suggestion = websocket.receive_json()
             assert suggestion["status"] == "no_evidence"
             assert suggestion["answer"] is None and suggestion["source"] is None
+            assert websocket.receive_json() == dict(type='generation_failed', code='disabled',
+                session_id=suggestion['session_id'], question_id=suggestion['question_id'])
             websocket.send_text("stop")
             with pytest.raises(WebSocketDisconnect):
                 websocket.receive_json()
@@ -974,19 +1051,27 @@ def test_final_statement_does_not_trigger_suggestion(tmp_path):
     assert store.exact_calls == 0
 
 
-def test_repeated_final_is_deduped_per_connection(tmp_path):
-    question = "What is authentication?"
-    app, _fake = fake_client(tmp_path, [FeedResult(final=question), FeedResult(final=question)])
+@pytest.mark.parametrize('language,question,intro', [
+    ('en-US', 'What is authentication?', 'Quick question, '),
+    ('es-MX', '¿Qué es la autenticación?', 'Una pregunta, '),
+])
+def test_repeated_final_is_deduped_per_connection(tmp_path, language, question, intro):
+    transcripts = [intro + question, question, intro + question]
+    app, _fake = fake_client(tmp_path, [FeedResult(final=text) for text in transcripts])
     add_qa(app.state.store, "live-en.md", question, "Authentication verifies identity.")
     with TestClient(app) as client:
-        _session_id, token = create_live(client)
+        _session_id, token = create_live(client, language)
         with client.websocket_connect("/live/transcribe", headers=ALLOWED_HEADERS) as websocket:
             assert start(websocket, token)["type"] == "ready"
             websocket.send_bytes(pcm_frame())
-            assert websocket.receive_json()["type"] == "final"
-            assert websocket.receive_json()["type"] == "suggestion"
-            websocket.send_bytes(pcm_frame())
-            assert websocket.receive_json()["type"] == "final"
+            assert websocket.receive_json()['text'] == transcripts[0]
+            suggestion = websocket.receive_json()
+            assert suggestion['type'] == 'suggestion' and suggestion['question'] == question.rstrip('?')
+            assert suggestion['answer'] == 'Authentication verifies identity.'
+            assert suggestion['source']['document_name'] == 'live-en.md'
+            for text in transcripts[1:]:
+                websocket.send_bytes(pcm_frame())
+                assert websocket.receive_json()['text'] == text
             websocket.send_text("stop")
             # No second suggestion is queued before the close.
             with pytest.raises(WebSocketDisconnect):
@@ -1076,6 +1161,8 @@ def test_final_emits_at_most_bounded_question_candidates(tmp_path):
             assert websocket.receive_json()["type"] == "final"
             suggestions = [websocket.receive_json() for _ in range(MAX_QUESTION_CANDIDATES)]
             assert all(event["type"] == "suggestion" for event in suggestions)
+            assert websocket.receive_json() == dict(type='generation_failed', code='disabled',
+                session_id=suggestions[-1]['session_id'], question_id=suggestions[-1]['question_id'])
             websocket.send_text("stop")
             # A ninth suggestion would be queued before the close and fail here.
             with pytest.raises(WebSocketDisconnect):

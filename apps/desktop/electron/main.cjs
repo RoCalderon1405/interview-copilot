@@ -1,6 +1,6 @@
 /** Interview Copilot native window shell. System audio is deliberately NOT enabled here. */
 'use strict';
-const { app, BrowserWindow, ipcMain, desktopCapturer, Tray, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, Tray, Menu, nativeImage, screen } = require('electron');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const DEV_ORIGIN = 'http://127.0.0.1:5173';
@@ -17,6 +17,50 @@ let hideAllowed = true;
 let continuityTimer;
 let lastPcmAt = 0;
 let lastPcmFrames = 0;
+let liveMode = 'expanded';
+let liveOpacity = 1;
+let transparencyAvailable = process.platform === 'win32' && process.env?.COPILOT_OPAQUE_WINDOW !== '1';
+let customFrame = transparencyAvailable;
+const modeBounds = {expanded:null, compact:null};
+let expandedMaximized = false;
+
+function windowState(win) {
+  return {available:true, protected:win.isContentProtected(), alwaysOnTop:win.isAlwaysOnTop(),
+    mode:liveMode, backgroundOpacity:liveOpacity, transparencyAvailable, customFrame};
+}
+function applyLiveBackground(win) {
+  const translucent = transparencyAvailable && liveMode === 'compact' && liveOpacity < 1;
+  try {
+    // Electron documents transparent-window resize limitations. Never fade text with setOpacity.
+    win.setResizable(!translucent);
+    win.setBackgroundColor(translucent ? '#00000000' : '#0a0f19');
+  } catch {
+    transparencyAvailable = false; liveOpacity = 1;
+    win.setBackgroundColor('#0a0f19');
+    win.setResizable(true);
+  }
+}
+function setLiveMode(win, mode) {
+  if (!['compact','expanded'].includes(mode)) return false;
+  if (mode === liveMode) return windowState(win);
+  modeBounds[liveMode] = win.getNormalBounds();
+  if (liveMode === 'expanded') expandedMaximized = win.isMaximized();
+  if (win.isMaximized()) win.unmaximize();
+  const previous = modeBounds[liveMode];
+  const target = modeBounds[mode] ?? {...previous, width:520, height:700};
+  const area = screen.getDisplayMatching(target).workArea;
+  const minWidth = Math.min(mode === 'compact' ? 420 : 880, area.width);
+  const minHeight = Math.min(mode === 'compact' ? 400 : 650, area.height);
+  const width = Math.min(area.width, Math.max(minWidth,target.width));
+  const height = Math.min(area.height, Math.max(minHeight,target.height));
+  win.setMinimumSize(minWidth,minHeight);
+  win.setBounds({width,height,x:Math.max(area.x,Math.min(target.x,area.x+area.width-width)),
+    y:Math.max(area.y,Math.min(target.y,area.y+area.height-height))});
+  liveMode = mode;
+  applyLiveBackground(win);
+  if (mode === 'expanded' && expandedMaximized) win.maximize();
+  return windowState(win);
+}
 
 function revealCaptureSafety() {
   hideAllowed = false;
@@ -126,6 +170,15 @@ function safeLiveEvent(raw) {
   if (raw.type === 'partial' || raw.type === 'final')
     return {type: raw.type, text: cleanText(raw.text)};
   if (raw.type === 'error') return {type:'error', text:cleanText(raw.text, 240)};
+  if (raw.type === 'generation_failed') {
+    if (!['disabled','not_configured','invalid_input','unavailable','timeout','invalid_response','provider_error'].includes(raw.code) ||
+        typeof raw.session_id !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(raw.session_id) ||
+        typeof raw.question_id !== 'string' || raw.question_id.length > 160 ||
+        !raw.question_id.startsWith(raw.session_id + ':') || !/^[a-zA-Z0-9:-]+$/.test(raw.question_id) ||
+        raw.kind != null || raw.answer != null || raw.source != null || raw.match_type != null || raw.status != null) return null;
+    // Never relay error messages, provider payloads or rejected content.
+    return {type:'generation_failed', session_id:raw.session_id, question_id:raw.question_id, code:raw.code};
+  }
   if (raw.type === 'generated_suggestion') {
     const bounded = (value, max) => typeof value === 'string' && value.trim().length > 0 && value.length <= max;
     if (raw.kind !== 'ai_generated' || raw.source !== null || raw.provider !== 'ollama' ||
@@ -233,12 +286,19 @@ function trustedWindow(event) {
   return win;
 }
 function createWindow() {
-  mainWindow = new BrowserWindow({
+  const options = {
     width: 1220, height: 820, minWidth: 880, minHeight: 650, title: 'Interview Copilot',
     backgroundColor: '#0a0f19', show: false, autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname,'preload.cjs'), contextIsolation: true,
       sandbox: true, nodeIntegration: false, webSecurity: true },
-  });
+  };
+  try {
+    mainWindow = new BrowserWindow({...options, ...(transparencyAvailable
+      ? {transparent:true, frame:false} : {})});
+  } catch {
+    transparencyAvailable = false; customFrame = false;
+    mainWindow = new BrowserWindow(options);
+  }
   const ses = mainWindow.webContents.session;
   // The production shell never requests audio/video. Do not expose media permissions here.
   ses.setPermissionCheckHandler(() => false);
@@ -260,8 +320,19 @@ function createWindow() {
 app.whenReady().then(() => {
   ipcMain.handle('copilot:window-state', event => {
     const win = trustedWindow(event);
-    return { available: true, protected: win.isContentProtected(), alwaysOnTop: win.isAlwaysOnTop() };
+    return windowState(win);
   });
+  ipcMain.handle('copilot:set-live-mode', (event, mode) => setLiveMode(trustedWindow(event),mode));
+  ipcMain.handle('copilot:set-live-opacity', (event, opacity) => {
+    const win = trustedWindow(event);
+    if (typeof opacity !== 'number' || !Number.isFinite(opacity) || opacity < 0.8 || opacity > 1 ||
+        (opacity !== 1 && (!transparencyAvailable || liveMode !== 'compact'))) return false;
+    liveOpacity = opacity;
+    applyLiveBackground(win);
+    return windowState(win);
+  });
+  ipcMain.handle('copilot:window-minimize', event => { trustedWindow(event).minimize(); return true; });
+  ipcMain.handle('copilot:window-close', event => { trustedWindow(event).close(); return true; });
   ipcMain.handle('copilot:set-protection', (event, enabled) => {
     const win = trustedWindow(event);
     if (typeof enabled !== 'boolean') return false;

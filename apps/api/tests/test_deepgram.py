@@ -305,7 +305,8 @@ def test_unknown_vocabulary_profile_rejected_before_any_cloud_connection(tmp_pat
         assert app.state.live.deepgram.profiles == []
 
 
-def test_deepgram_recognized_direct_comparison_reaches_suggestion(tmp_path):
+@pytest.mark.parametrize('outcome', ['success', 'timeout'])
+def test_deepgram_recognized_direct_comparison_reaches_suggestion(tmp_path, outcome):
     """A completed cloud final must reach detection, even with no stored match."""
     class ComparisonSession(FakeCloudSession):
         async def feed(self, pcm):
@@ -320,6 +321,18 @@ def test_deepgram_recognized_direct_comparison_reaches_suggestion(tmp_path):
             return self.session
 
     app = create_app(tmp_path)
+    from app.application.generation import GenerationError, GenerationService
+    class LocalProvider:
+        name = 'ollama'
+        model = 'synthetic-local'
+        calls = 0
+        async def generate(self, question, language):
+            self.calls += 1
+            if outcome == 'timeout':
+                raise GenerationError('timeout')
+            return 'A synthetic technical explanation.'
+    local = LocalProvider()
+    app.state.generation = GenerationService(local, enabled=True)
     fake = ComparisonProvider()
     app.state.live.deepgram = fake
     with TestClient(app) as client:
@@ -340,7 +353,16 @@ def test_deepgram_recognized_direct_comparison_reaches_suggestion(tmp_path):
             assert suggestion["type"] == "suggestion", suggestion
             assert suggestion["question"] == "compare rest and graft twelve"
             assert suggestion["status"] == "no_evidence"
+            generation = ws.receive_json()
+            assert generation['session_id'] == sid and generation['question_id'] == suggestion['question_id']
+            if outcome == 'success':
+                assert generation['type'] == 'generated_suggestion'
+                assert generation['kind'] == 'ai_generated' and generation['source'] is None
+            else:
+                assert generation == dict(type='generation_failed', code='timeout', session_id=sid,
+                                          question_id=suggestion['question_id'])
             ws.send_text("stop")
             with pytest.raises(WebSocketDisconnect):
                 ws.receive_json()
     assert fake.profiles == ["fullstack"]
+    assert local.calls == 1

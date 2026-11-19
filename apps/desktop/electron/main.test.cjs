@@ -9,7 +9,8 @@ const { EventEmitter } = require('node:events');
 const { pathToFileURL } = require('node:url');
 const DEV = 'http://127.0.0.1:5173';
 const DIST = pathToFileURL(path.join(__dirname, '../dist/index.html')).href;
-function boot({packaged=false, platform='win32', trayFails=false}={}) {
+function boot({packaged=false, platform='win32', trayFails=false, opaqueWindow=false, transparentFails=false,
+  backgroundFails=false, workArea={x:0,y:0,width:1920,height:1080}}={}) {
   const handles = new Map();
   const listeners = new Map();
   const windows=[];
@@ -24,7 +25,7 @@ function boot({packaged=false, platform='win32', trayFails=false}={}) {
     navigate(url){let denied=false;this.emit('will-navigate',{preventDefault:()=>denied=true},url);return denied;}
   }
   class Window extends EventEmitter {
-    constructor(options){super();this.options=options;this.webContents=new Contents();this.protected=false;this.top=false;this.destroyed=false;windows.push(this);}
+    constructor(options){super();if(options.transparent && transparentFails)throw new Error('transparent unavailable');this.options=options;this.webContents=new Contents();this.protected=false;this.top=false;this.destroyed=false;this.bounds={x:100,y:100,width:options.width,height:options.height};windows.push(this);}
     loadURL(url){this.webContents.mainFrame.url=url;return Promise.resolve();}
     loadFile(file){this.webContents.mainFrame.url=pathToFileURL(file).href;return Promise.resolve();}
     setContentProtection(v){this.protected=v;}
@@ -37,7 +38,16 @@ function boot({packaged=false, platform='win32', trayFails=false}={}) {
     showInactive(){this.visible=true;}
     hide(){this.visible=false;}
     isMinimized(){return Boolean(this.minimized);}
+    minimize(){this.minimized=true;}
     restore(){this.minimized=false;}
+    getNormalBounds(){return {...this.bounds};}
+    setBounds(bounds){this.bounds={...bounds};}
+    setMinimumSize(width,height){this.minimum=[width,height];}
+    isMaximized(){return Boolean(this.maximized);}
+    maximize(){this.maximized=true;}
+    unmaximize(){this.maximized=false;}
+    setResizable(value){this.resizable=value;}
+    setBackgroundColor(value){if(backgroundFails && value==='#00000000')throw new Error('alpha failed');this.background=value;}
     setSkipTaskbar(value){this.skipTaskbar=value;}
     close(){this.emit('close');this.destroyed=true;this.emit('closed');}
     static getAllWindows(){return windows;}
@@ -48,8 +58,8 @@ function boot({packaged=false, platform='win32', trayFails=false}={}) {
     setContextMenu(value){this.menu=value;}
     destroy(){this.destroyed=true;}
   }
-  const electron={app:{isPackaged:packaged,whenReady:()=>Promise.resolve(),on(){},quit(){}},BrowserWindow:Window,Tray:RecoveryTray,Menu:{buildFromTemplate:items=>items},nativeImage:{createFromBitmap:()=>({isEmpty:()=>false})},desktopCapturer:{getSources:async()=>[{id:'screen:1:0'}]},ipcMain:{handle:(name,fn)=>handles.set(name,fn),on:(name,fn)=>listeners.set(name,fn)}};
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'main.cjs'),'utf8'),{__dirname,URL,Buffer,Date:{now:()=>now},setInterval:fn=>{timers.add(fn);return {fn,unref(){}};},clearInterval:timer=>timers.delete(timer.fn),process:{platform},require:id=>id==='electron'?electron:require(id)}, {filename:'main.cjs'});
+  const electron={app:{isPackaged:packaged,whenReady:()=>Promise.resolve(),on(){},quit(){}},BrowserWindow:Window,screen:{getDisplayMatching:()=>({workArea})},Tray:RecoveryTray,Menu:{buildFromTemplate:items=>items},nativeImage:{createFromBitmap:()=>({isEmpty:()=>false})},desktopCapturer:{getSources:async()=>[{id:'screen:1:0'}]},ipcMain:{handle:(name,fn)=>handles.set(name,fn),on:(name,fn)=>listeners.set(name,fn)}};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'main.cjs'),'utf8'),{__dirname,URL,Buffer,Date:{now:()=>now},setInterval:fn=>{timers.add(fn);return {fn,unref(){}};},clearInterval:timer=>timers.delete(timer.fn),process:{platform,env:opaqueWindow?{COPILOT_OPAQUE_WINDOW:'1'}:{}},require:id=>id==='electron'?electron:require(id)}, {filename:'main.cjs'});
   return new Promise(resolve=>setImmediate(()=>resolve({handles,listeners,windows,trays,timers,window:windows[0],advance:ms=>{now+=ms;for(const fn of timers)fn();}})));
 }
 const e=win=>({sender:win.webContents,senderFrame:win.webContents.mainFrame});
@@ -87,6 +97,63 @@ test('production allows only packaged entry URL',async()=>{
 test('Linux does not enable Windows capture protection automatically',async()=>{
  const h=await boot({platform:'linux'});
  assert.equal(h.window.protected,false);
+});
+
+test('Live layouts restore per-mode geometry without replacing windows, capture, protection or pin state',async()=>{
+  const h=await boot();invoke(h,'live-open');const c=h.windows[1];
+  const publish=h.listeners.get('copilot:live-packet');
+  publish(e(c),{type:'capture_state',attempt:1,phase:'connecting'});
+  publish(e(c),{type:'capture_state',attempt:1,phase:'active'});
+  h.listeners.get('copilot:live-packet')(e(c),{type:'final',text:'Synthetic transcript'});
+  const history=JSON.stringify(invoke(h,'live-state'));
+  invoke(h,'set-on-top',true);
+  h.window.bounds={x:500,y:180,width:1100,height:760};
+  assert.equal(invoke(h,'set-live-mode','compact').mode,'compact');
+  assert.deepEqual(JSON.parse(JSON.stringify(h.window.bounds)),{x:500,y:180,width:520,height:700});
+  h.window.bounds={x:700,y:250,width:460,height:600};
+  invoke(h,'set-live-mode','compact'); // idempotent requests do not reset user geometry
+  assert.equal(h.window.bounds.width,460);
+  invoke(h,'set-live-mode','expanded');
+  assert.deepEqual(JSON.parse(JSON.stringify(h.window.bounds)),{x:500,y:180,width:1100,height:760});
+  invoke(h,'set-live-mode','compact');
+  assert.deepEqual(JSON.parse(JSON.stringify(h.window.bounds)),{x:700,y:250,width:460,height:600});
+  assert.equal(h.windows.length,2);assert.equal(c.isDestroyed(),false);
+  assert.equal(c.visible,false);assert.equal(h.window.skipTaskbar,true);
+  assert.equal(h.trays.length,1);assert.equal(h.timers.size,1);
+  assert.equal(h.window.protected,true);assert.equal(h.window.top,true);
+  assert.equal(JSON.stringify(invoke(h,'live-state')),history);
+  invoke(h,'window-minimize');assert.equal(h.window.minimized,true);
+  invoke(h,'window-close');assert.equal(c.isDestroyed(),true);
+});
+
+test('overlay IPC bounds alpha/layout, supplies opaque fallbacks and keeps native access trusted',async()=>{
+  const h=await boot();
+  assert.equal(h.window.options.transparent,true);assert.equal(h.window.options.frame,false);
+  assert.equal(invoke(h,'set-live-opacity',0.9),false); // other pages/expanded are opaque
+  for(const mode of [null,{},'minimized'])assert.equal(invoke(h,'set-live-mode',mode),false);
+  invoke(h,'set-live-mode','compact');
+  for(const alpha of [null,'0.9',NaN,Infinity,0.79,1.01])assert.equal(invoke(h,'set-live-opacity',alpha),false);
+  assert.equal(invoke(h,'set-live-opacity',0.8).backgroundOpacity,0.8);
+  assert.equal(h.window.background,'#00000000');assert.equal(h.window.resizable,false);
+  invoke(h,'set-live-mode','expanded');assert.equal(h.window.background,'#0a0f19');assert.equal(h.window.resizable,true);
+  invoke(h,'set-live-mode','compact');assert.equal(h.window.background,'#00000000');
+  invoke(h,'set-live-opacity',1);assert.equal(h.window.background,'#0a0f19');assert.equal(h.window.resizable,true);
+  for(const method of ['set-live-mode','set-live-opacity','window-minimize','window-close']) {
+    assert.throws(()=>h.handles.get('copilot:'+method)({sender:{},senderFrame:h.window.webContents.mainFrame},'compact'),/Untrusted/);
+  }
+  for(const options of [{opaqueWindow:true},{transparentFails:true},{backgroundFails:true}]) {
+    const fallback=await boot(options);invoke(fallback,'set-live-mode','compact');
+    if(options.backgroundFails)invoke(fallback,'set-live-opacity',0.9);
+    const state=invoke(fallback,'window-state');
+    assert.equal(state.transparencyAvailable,false);assert.equal(state.backgroundOpacity,1);
+    assert.equal(invoke(fallback,'set-live-opacity',0.9),false);
+    assert.equal(fallback.window.background,'#0a0f19');
+  }
+  const small=await boot({workArea:{x:0,y:0,width:800,height:540}});
+  small.window.bounds={x:2000,y:2000,width:1200,height:820};
+  invoke(small,'set-live-mode','compact');
+  assert.ok(small.window.bounds.x+small.window.bounds.width<=800);
+  assert.ok(small.window.bounds.y+small.window.bounds.height<=540);
 });
 
 test('capture runs only in an isolated session, and media requires main-frame user gesture',async()=>{
@@ -205,6 +272,26 @@ test('tray failure and capture crash/close preserve normal recovery and release 
 const generated = () => ({type:'generated_suggestion',kind:'ai_generated',session_id:'abc-123',
   question_id:'abc-123:conn:1',question:'Explain caching?',language:'en-US',answer:'Practical answer.',
   provider:'ollama',model:'local',source:null});
+test('generation failure IPC allows only safe codes/correlation and strips private details',async()=>{
+  const h=await boot();invoke(h,'live-open');const c=h.windows[1];
+  const publish=h.listeners.get('copilot:live-packet');
+  const failure={type:'generation_failed',session_id:'abc-123',question_id:'abc-123:conn:1',code:'timeout'};
+  const initial=invoke(h,'live-state').events.length;
+  publish(e(h.window),failure);
+  publish({...e(c),senderFrame:{url:c.webContents.mainFrame.url}},failure);
+  for(const patch of [{code:'PRIVATE EXCEPTION'},{code:{}},{session_id:''},{session_id:'x'.repeat(81)},
+    {session_id:'bad/id'},{question_id:'other:1'},{question_id:'abc-123:bad/id'},
+    {question_id:'abc-123:'+'x'.repeat(153)},{answer:'REJECTED CONTENT'},
+    {source:{document_name:'fake'}},{kind:'ai_generated'},{match_type:'exact_qa'},{status:'found'}]) {
+    publish(e(c),{...failure,...patch});
+  }
+  assert.equal(invoke(h,'live-state').events.length,initial);
+  for(const code of ['disabled','not_configured','invalid_input','unavailable','timeout','invalid_response','provider_error']) {
+    publish(e(c),{...failure,code,message:'PRIVATE',prompt:'PRIVATE',credentials:'PRIVATE',question:'PRIVATE'});
+    assert.deepEqual(JSON.parse(JSON.stringify(invoke(h,'live-state').events.at(-1))),{...failure,code});
+    assert.deepEqual(JSON.parse(JSON.stringify(h.window.webContents.sent.at(-1).data)),{...failure,code});
+  }
+});
 test('generated event is allowlisted, bounded and cannot carry documentary provenance',async()=>{
   const h=await boot();invoke(h,'live-open');const c=h.windows[1];
   const publish=h.listeners.get('copilot:live-packet');

@@ -1,13 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import {
   AudioLines, BookOpen, Check, ChevronRight, CircleHelp, File, FileSpreadsheet, FileText,
   GraduationCap, Headphones, LayoutDashboard, LockKeyhole, Plus, Search,
-  Send, Settings, Shield, Sparkles, Trash2, UploadCloud, WifiOff, X,
+  Send, Settings, Shield, Sparkles, Trash2, UploadCloud, WifiOff, X, Minus,
 } from 'lucide-react';
 import { api } from './api';
 import {LiveWorkspace} from './features/live/LiveWorkspace';
 import {useI18n} from './i18n';
-import type { AnswerResponse, DocumentRecord, Feedback, PracticeQuestion, Session, SessionReport } from './types';
+import type { AnswerResponse, DocumentRecord, Feedback, LiveWindowState, PracticeQuestion, Session, SessionReport } from './types';
 
 type Page = 'overview' | 'knowledge' | 'practice' | 'live' | 'settings';
 const NAV: { id: Page; label: string; icon: typeof BookOpen }[] = [
@@ -32,16 +32,86 @@ export default function App() {
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [nativeWindow, setNativeWindow] = useState<LiveWindowState | null>(null);
+  const [windowBusy, setWindowBusy] = useState(false);
+  const [onTopState, setOnTopState] = useState<boolean | null>(null);
+  const [onTopBusy, setOnTopBusy] = useState(false);
+  const onTopRequest = useRef(false);
+  const modeRequest = useRef(false);
+  const windowRevision = useRef(0);
+  const compact = page === 'live' && nativeWindow?.mode === 'compact';
+  useEffect(() => {
+    const revision = ++windowRevision.current;
+    let disposed = false;
+    void window.copilotDesktop?.getWindowState().then(state => {
+      if (disposed || revision !== windowRevision.current) return;
+      if (!['compact','expanded'].includes(state.mode) ||
+          typeof window.copilotDesktop?.setLiveMode !== 'function' ||
+          typeof window.copilotDesktop?.setLiveOpacity !== 'function') {
+        setError('Los controles nativos de Live no están actualizados. Cierra la aplicación (se detendrá la captura) y vuelve a iniciarla; recargar la interfaz no basta.');
+        return;
+      }
+      setNativeWindow(state);
+      setOnTopState(state.alwaysOnTop);
+      if (state.mode === 'compact') setPage('live');
+    }).catch(() => {});
+    return () => {disposed = true;};
+  }, [page]);
+  useEffect(() => {
+    document.documentElement.classList.toggle('live-overlay', Boolean(compact));
+    return () => document.documentElement.classList.remove('live-overlay');
+  }, [compact]);
+  const changeWindow = async (field:'mode'|'opacity', value:'compact'|'expanded'|number) => {
+    const bridge = window.copilotDesktop;
+    if (!bridge || onTopRequest.current || modeRequest.current) return false;
+    if (typeof bridge.setLiveMode !== 'function' || typeof bridge.setLiveOpacity !== 'function') {
+      setError('Los controles nativos de Live no están actualizados. Cierra la aplicación (se detendrá la captura) y vuelve a iniciarla; recargar la interfaz no basta.');
+      return false;
+    }
+    const revision = ++windowRevision.current;
+    if (field === 'mode') {modeRequest.current = true;setWindowBusy(true);}
+    try {
+      const next = field === 'mode' ? await bridge.setLiveMode(value as 'compact'|'expanded')
+        : await bridge.setLiveOpacity(value as number);
+      if (!next) throw new Error('invalid window setting');
+      if (revision === windowRevision.current) {setNativeWindow(next);setOnTopState(next.alwaysOnTop);setError('');}
+      return true;
+    } catch {setError('No se pudo cambiar la presentación de Live. Usa el modo opaco o vuelve a expandir.');return false;}
+    finally {if (field === 'mode') {modeRequest.current = false;setWindowBusy(false);}}
+  };
+  const toggleOnTop = async () => {
+    const bridge = window.copilotDesktop;
+    if (!bridge || !nativeWindow || modeRequest.current || onTopRequest.current) return;
+    onTopRequest.current = true;
+    setOnTopBusy(true);
+    ++windowRevision.current;
+    try {
+      // Read native state before toggling; never invert a stale renderer snapshot.
+      const current = await bridge.getWindowState();
+      const alwaysOnTop = await bridge.setAlwaysOnTop(!current.alwaysOnTop);
+      if (typeof alwaysOnTop !== 'boolean') throw new Error('invalid window state');
+      setNativeWindow(previous => previous ? {...previous,alwaysOnTop} : previous);
+      setOnTopState(alwaysOnTop);
+      setError(previous => previous === 'No se pudo cambiar la configuración de ventana.' ? '' : previous);
+    } catch {setOnTopState(null);setError('No se pudo cambiar la configuración de ventana.');}
+    finally {onTopRequest.current = false;setOnTopBusy(false);}
+  };
   const refresh = async () => { try { const result = await api.documents(); setDocuments(result.documents); setConnected(true); } catch { setConnected(false); } };
   useEffect(() => { void api.health().then(() => setConnected(true)).catch(() => setConnected(false)); void refresh(); }, []);
-  const navigate = (to: Page) => {setPage(to); setError(''); setNotice('');};
+  const navigate = (to: Page) => {
+    // Leaving Live restores normal geometry before changing pages. Mode switches never navigate.
+    if (compact && to !== 'live') {
+      void changeWindow('mode','expanded').then(ok => {if (ok) {setPage(to);setError('');setNotice('');}});
+    } else {setPage(to); setError(''); setNotice('');}
+  };
   const showError = (err: unknown) => setError(err instanceof Error ? err.message : 'Error desconocido');
   const onUpload = async (file: File) => {
     setError(''); setNotice('');
     try { const result = await api.upload(file); setNotice(`${result.name}: ${result.entry_count} entradas indexadas.`); await refresh(); }
     catch(err) { showError(err); }
   };
-  return <div className={`app-layout ${page === 'live' ? 'app-layout-live' : ''}`}>
+  return <div className={`app-layout ${page === 'live' ? 'app-layout-live' : ''} ${compact ? 'app-layout-compact' : ''} ${nativeWindow?.customFrame ? 'app-custom-frame' : ''}`}
+    style={{'--overlay-opacity':compact ? nativeWindow?.backgroundOpacity ?? 1 : 1} as CSSProperties}>
     <aside className="sidebar">
        <div className="brand"><div className="brand-mark"><AudioLines size={23}/></div><div><b>Interview<span>Copilot</span></b><small>{t('YOUR AI INTERVIEW WORKSPACE')}</small></div></div>
        <div className="workspace-label">{t('WORKSPACE')}</div>
@@ -49,7 +119,7 @@ export default function App() {
        <div className="sidebar-bottom"><div className="privacy-tile"><Shield size={18}/><div><strong>{t('Private by design')}</strong><span>{t('Documents stored locally')}</span></div></div><div className="profile"><div className="avatar">IC</div><div><strong>{t('Personal workspace')}</strong><span>{t('Version 0.1.2 · Local preview')}</span></div></div></div>
     </aside>
     <main className="main-area">
-       <div className="topbar"><div className="breadcrumb">{t('WORKSPACE')} <ChevronRight size={13}/> <strong>{t(NAV.find(n=>n.id===page)?.label ?? '')}</strong></div><div className="topbar-tools"><label className="ui-language"><span>{t('Idioma de interfaz')}</span><select value={language} onChange={event=>setLanguage(event.target.value === 'en' ? 'en' : 'es')} title={t('El idioma de interfaz no cambia el idioma de transcripción ni de la IA.')}><option value="en">EN — English</option><option value="es">ES — Español</option></select></label><div className={`status ${connected ? 'online':'offline'}`}>{connected ? <Check size={14}/> : <WifiOff size={14}/>} {t(connected ? 'API connected' : 'API offline')}</div></div></div>
+       <div className="topbar"><div className="breadcrumb">{t('WORKSPACE')} <ChevronRight size={13}/> <strong>{t(NAV.find(n=>n.id===page)?.label ?? '')}</strong></div><span className="overlay-brand">Interview Copilot</span><div className="topbar-tools"><label className="ui-language"><span>{t('Idioma de interfaz')}</span><select value={language} onChange={event=>setLanguage(event.target.value === 'en' ? 'en' : 'es')} title={t('El idioma de interfaz no cambia el idioma de transcripción ni de la IA.')}><option value="en">EN — English</option><option value="es">ES — Español</option></select></label><div className={`status ${connected ? 'online':'offline'}`}>{connected ? <Check size={14}/> : <WifiOff size={14}/>} {t(connected ? 'API connected' : 'API offline')}</div>{nativeWindow?.customFrame && <div className="native-window-actions"><button type="button" title={t('Minimizar ventana')} aria-label={t('Minimizar ventana')} onClick={()=>{void window.copilotDesktop?.minimizeWindow().catch(()=>{});}}><Minus size={16}/></button><button type="button" title={t('Cerrar aplicación y detener captura')} aria-label={t('Cerrar aplicación y detener captura')} onClick={()=>{void window.copilotDesktop?.closeWindow().catch(()=>{});}}><X size={16}/></button></div>}</div></div>
        {!saved && <div role="status" className="alert">{t('No se pudo guardar el idioma. Se aplicará solo hasta cerrar esta ventana.')}</div>}
        {error && <div role="alert" className="alert error"><CircleHelp size={17}/>{t(error)}<button onClick={()=>setError('')} aria-label={t('Cerrar')}><X size={16}/></button></div>}
        {notice && <div role="status" className="alert success"><Check size={17}/>{t(notice)}<button onClick={()=>setNotice('')} aria-label={t('Cerrar')}><X size={16}/></button></div>}
@@ -57,7 +127,10 @@ export default function App() {
         {page === 'overview' && <Overview docs={documents} navigate={navigate}/>}
         {page === 'knowledge' && <Knowledge docs={documents} onUpload={onUpload} refresh={refresh} showError={showError} onNotice={setNotice}/>}
         {page === 'practice' && <Practice showError={showError}/>}
-        {page === 'live' && <LiveWorkspace showError={showError}/>}
+        {page === 'live' && <LiveWorkspace showError={showError} windowState={nativeWindow} windowBusy={windowBusy || onTopBusy}
+          onTopState={onTopState} onTopBusy={onTopBusy}
+          onModeChange={mode=>{void changeWindow('mode',mode);}}
+          onOpacityChange={opacity=>{void changeWindow('opacity',opacity);}} onTopChange={()=>{void toggleOnTop();}}/>}
         {page === 'settings' && <SettingsPage />}
       </div>
     </main>

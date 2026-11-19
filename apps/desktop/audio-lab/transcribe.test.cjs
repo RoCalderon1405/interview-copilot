@@ -256,3 +256,23 @@ test('capture localization updates authored copy without translating incoming co
   changeLanguage('es');assert.equal(status.textContent,'Conectando con Deepgram Nova-3…');
   assert.equal(window.copilotUi.translate('en','FALLO: Windows no devolvió ninguna pista de audio'),'FAILURE: Windows did not return an audio track');
 });
+
+test('generation failure relay preserves PCM and drops stopped or replaced socket results',async()=>{
+  const h=harness({bridge:true});
+  await h.element('start').handlers.click();
+  const receive=h.sockets[0].onmessage;
+  receive({data:JSON.stringify({type:'ready',provider:'vosk',language:'en-US',sample_rate:16000,sample_format:'pcm_s16le',channels:1})});
+  await new Promise(resolve=>setImmediate(resolve));
+  const failure={type:'generation_failed',session_id:'session-1',question_id:'session-1:conn:1',code:'timeout'};
+  receive({data:JSON.stringify(failure)});
+  assert.deepEqual(JSON.parse(JSON.stringify(h.packets.at(-1))),failure);
+  assert.equal(h.calls.includes('track.stop'),false);assert.equal(h.calls.includes('socket.close'),false);
+  const sent=h.sockets[0].sent.length;
+  h.worklets[0].port.onmessage({data:new ArrayBuffer(3200)});
+  assert.equal(h.sockets[0].sent.length,sent+1);
+  h.element('stop').handlers.click();receive({data:JSON.stringify(failure)});
+  assert.equal(h.packets.filter(packet=>packet.type==='generation_failed').length,1);
+  h.sockets[0].onclose({code:1000});await new Promise(resolve=>setImmediate(resolve));
+  await h.element('start').handlers.click();receive({data:JSON.stringify(failure)});
+  assert.equal(h.packets.filter(packet=>packet.type==='generation_failed').length,1);
+});

@@ -428,6 +428,10 @@ def test_whisper_keeps_semantic_priority_and_opt_in_ollama_contract(tmp_path, ki
                 generated = ws.receive_json()
                 assert generated["type"] == "generated_suggestion" and generated["source"] is None
                 assert generated["provider"] == "ollama" and len(generation.calls) == 1
+            elif kind == "disabled":
+                assert ws.receive_json() == dict(type='generation_failed', code='disabled',
+                    session_id=suggestion['session_id'], question_id=suggestion['question_id'])
+                assert not generation.calls
             else:
                 assert not generation.calls
             ws.send_text("stop")

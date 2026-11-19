@@ -3,6 +3,10 @@
 const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('copilotDesktop', {
   getWindowState: () => ipcRenderer.invoke('copilot:window-state'),
+  setLiveMode: mode => ipcRenderer.invoke('copilot:set-live-mode', mode),
+  setLiveOpacity: opacity => ipcRenderer.invoke('copilot:set-live-opacity', opacity),
+  minimizeWindow: () => ipcRenderer.invoke('copilot:window-minimize'),
+  closeWindow: () => ipcRenderer.invoke('copilot:window-close'),
   setContentProtection: enabled => ipcRenderer.invoke('copilot:set-protection', enabled),
   setAlwaysOnTop: enabled => ipcRenderer.invoke('copilot:set-on-top', enabled),
   openLiveCapture: () => ipcRenderer.invoke('copilot:live-open'),

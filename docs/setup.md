@@ -17,6 +17,20 @@ Equivalent backend command, from the repository root:
 
 Keep these WebSocket limits and the single-process Windows launch path. Do not start a second transcription lab/desktop on Vite port 5173 or a second backend on 8765. `/live/status` and `/semantic/status` report configuration/index availability, not real speech accuracy or remote provider authorization.
 
+## Opaque window fallback (UI-004)
+
+Live starts opaque. In **Live Interview / Entrevista en vivo**, open **Overlay appearance / Aspecto del overlay**, immediately below the mode/pin/capture controls. This disclosure is visible in both modes. Select **Compact mode / Modo compacto** to enable its **Compact-mode opacity / Opacidad en modo compacto** slider (80–100%). The value belongs to compact mode even when displayed disabled in expanded mode; expanded always stays opaque. Text remains opaque. **Opaque background / Fondo opaco** remains available in both modes; select it before manual resizing because translucent windows disable manual resize under Electron's Windows limitations.
+
+After changing Electron main/preload code, close the desktop normally and restart it using the usual launch command. Vite hot reload updates React only; it does not update native IPC handlers or the existing preload. Mixed versions can display the generic presentation failure even though a fresh Electron instance switches correctly. Live now detects an older native bridge and requests a full restart instead of offering unsupported controls. Closing stops capture; do not restart without saving any separately needed work.
+
+If transparency or custom window chrome is unreliable, close the desktop normally (this stops capture), then set the following in the terminal that launches Electron, before using your usual desktop startup command:
+
+```bat
+set "COPILOT_OPAQUE_WINDOW=1"
+```
+
+In PowerShell use `$env:COPILOT_OPAQUE_WINDOW = '1'`. This starts an opaque window with the normal native frame and disables translucent settings; compact/expanded modes still work. To re-enable transparency on the next startup, use `set "COPILOT_OPAQUE_WINDOW="` in CMD or `Remove-Item Env:COPILOT_OPAQUE_WINDOW` in PowerShell. No backend, database, model or index change is required. Mode rectangles and opacity are memory-only and reset on app exit. Native Windows transparency, scaling and drag/resize behavior remain pending acceptance.
+
 ## Optional Faster-Whisper Live setup (STT-001A)
 
 Faster-Whisper uses an explicitly configured local **Small multilingual, CPU INT8** worker. It does not use CUDA, pull models or silently fall back to another provider. Reuse the approved isolated runtime; do not replace the working API `.venv`.
@@ -98,6 +112,8 @@ Only the current question, selected-language instructions and three fixed synthe
 AI-001C content checks reject substantial prompt copies and narrowly recognized unsupported autobiographical work claims. They are not fact verification: fabrication and technical errors can escape them, and valid paraphrases/hypotheticals can be rejected. **Quality acceptance is not met.** Review [known failures and false positives](live-mode.md#ai-001c--few-shot-generation-evaluation) before enabling it.
 
 Generation runs outside PCM reception with one active request and one replaceable pending question. Newer questions, stop, disconnect and session finish cancel/suppress obsolete results. HTTP cancellation cannot prove that Ollama's internal inference stopped immediately. See [generation/lifecycle boundaries](architecture.md#permission-transport-and-privacy-boundaries).
+
+AI-001D makes current-question failures visible beside `no_evidence` in the **main Live workspace**, not the auxiliary capture window. The interface translates fixed reasons for `disabled`, `not_configured`, `invalid_input`, `unavailable`, `timeout`, `invalid_response` and `provider_error`. Invalid startup settings remain distinct from intentional disablement and never prevent API/audio startup or enable an inference provider. No provider error text, configuration value, prompt or rejected answer is relayed. `invalid_response` covers format and content-policy rejection, not a factuality verdict; `provider_error` remains generic (including HTTP 404), not proof of a missing model. Review backend process settings and the existing local model before changing anything; the app does not load `.env` implicitly, install models, retry, increase deadlines or switch providers. Superseded/stopped/disconnected/finished work stays suppressed rather than emitting late failure events. See [evidence and Windows acceptance](live-mode.md#ai-001d--observable-generation-outcomes).
 
 ## Opt-in synthetic Ollama A/B evaluation (AI-001C)
 

@@ -275,8 +275,8 @@ start.addEventListener('click', async () => {
       if (revision !== captureRevision) return;
       let packet;
       try { packet = JSON.parse(event.data); } catch { return; }
-      if (packet.type === 'generated_suggestion' && stopping) return;
-      if (['partial','final','suggestion','generated_suggestion'].includes(packet.type)) publish(packet);
+      if (['generated_suggestion','generation_failed'].includes(packet.type) && stopping) return;
+      if (['partial','final','suggestion','generated_suggestion','generation_failed'].includes(packet.type)) publish(packet);
       if (packet.type === 'ready') {
         if (packet.provider !== selectedProvider || packet.language !== selectedLanguage) {
           void fail(new Error('El motor o idioma autorizado es diferente'));

@@ -5,12 +5,18 @@ export type Session = { id: string; mode: 'live' | 'practice' };
 export type PracticeQuestion = { id: number; question: string; document_name: string };
 export type Feedback = { score: number; method: string; feedback: string; missing_concepts: string[]; expected_answer: string; source: Source };
 
+export type GenerationFailureCode = 'disabled' | 'not_configured' | 'invalid_input' | 'unavailable' |
+  'timeout' | 'invalid_response' | 'provider_error';
+export type LiveWindowState = {available:boolean; protected:boolean; alwaysOnTop:boolean;
+  mode:'compact' | 'expanded'; backgroundOpacity:number; transparencyAvailable:boolean; customFrame:boolean};
+
 export type LiveEvent =
   | {type: 'status'; text: string}
   | {type: 'error'; text: string}
   | {type: 'partial'; text: string}
   | {type: 'final'; text: string}
   | {type: 'metrics'; frames: number}
+  | {type: 'generation_failed'; session_id: string; question_id: string; code: GenerationFailureCode}
   | {type: 'generated_suggestion'; kind: 'ai_generated'; session_id: string; question_id: string;
       question: string; language: 'en-US' | 'es-MX'; answer: string; provider: 'ollama'; model: string; source: null}
   | {type: 'suggestion'; question: string; status: 'found' | 'no_evidence';
@@ -21,7 +27,11 @@ export type LiveEvent =
 declare global {
   interface Window {
     copilotDesktop?: {
-      getWindowState(): Promise<{ available: boolean; protected: boolean; alwaysOnTop: boolean }>;
+      getWindowState(): Promise<LiveWindowState>;
+      setLiveMode(mode: 'compact' | 'expanded'): Promise<LiveWindowState | false>;
+      setLiveOpacity(opacity: number): Promise<LiveWindowState | false>;
+      minimizeWindow(): Promise<boolean>;
+      closeWindow(): Promise<boolean>;
       setContentProtection(enabled: boolean): Promise<boolean>;
       setAlwaysOnTop(enabled: boolean): Promise<boolean>;
       openLiveCapture(): Promise<boolean>;

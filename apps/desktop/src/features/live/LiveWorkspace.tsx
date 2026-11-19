@@ -1,8 +1,8 @@
 import {useEffect, useRef, useState} from 'react';
-import {AudioLines, CircleHelp, Headphones, Search, Shield, Square} from 'lucide-react';
+import {AudioLines, CircleHelp, Headphones, Search, Shield, Square, Pin, PinOff, Minimize2, Maximize2, ChevronRight} from 'lucide-react';
 import {api} from '../../api';
 import {useI18n} from '../../i18n';
-import type {AnswerResponse, LiveEvent} from '../../types';
+import type {AnswerResponse, LiveEvent, LiveWindowState} from '../../types';
 import {LiveSuggestion} from './LiveSuggestion';
 import {initialLiveState, receiveLiveEvent, restoreLiveState, type LivePhase} from './liveState';
 
@@ -12,7 +12,13 @@ const PHASE_LABELS: Record<LivePhase, string> = {
 };
 
 /** Read-only Live workspace. Capture consent and provider selection stay isolated. */
-export function LiveWorkspace({showError}: {showError: (error: unknown) => void}) {
+export function LiveWorkspace({showError, windowState, windowBusy = false, onModeChange, onOpacityChange, onTopChange,
+  onTopState = windowState?.alwaysOnTop ?? null, onTopBusy = false}: {
+  showError: (error: unknown) => void; windowState?: LiveWindowState | null; windowBusy?: boolean;
+  onModeChange?: (mode:'compact'|'expanded') => void; onOpacityChange?: (opacity:number) => void;
+  onTopChange?: () => void;
+  onTopState?: boolean | null; onTopBusy?: boolean;
+}) {
   const {language, t} = useI18n();
   const [view, setView] = useState(initialLiveState);
   const [captureOpen, setCaptureOpen] = useState(false);
@@ -22,9 +28,11 @@ export function LiveWorkspace({showError}: {showError: (error: unknown) => void}
   const [question, setQuestion] = useState('');
   const [manualAnswer, setManualAnswer] = useState<AnswerResponse | null>(null);
   const [searching, setSearching] = useState(false);
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
   const mounted = useRef(false);
   const nativeRevision = useRef(0);
   const bridge = window.copilotDesktop;
+  const compact = windowState?.mode === 'compact';
 
   useEffect(() => {
     mounted.current = true;
@@ -103,45 +111,83 @@ export function LiveWorkspace({showError}: {showError: (error: unknown) => void}
   };
   const provider = view.provider === 'Deepgram Nova-3' ? `Deepgram Nova-3 · ${t('Nube')}`
     : view.provider ? `${view.provider} · Local` : t('Motor pendiente de confirmar');
-  return <div className="live-workspace">
+  const pinLabel = onTopBusy ? 'Actualizando…' : onTopState === null ? 'Sin confirmar'
+    : onTopState ? 'Activado' : 'Desactivado';
+  return <div className={`live-workspace ${compact ? 'live-workspace-compact' : ''}`}>
     <header className="live-header">
       <div className="live-session-heading"><h1>{t('Live Interview')}</h1>
         <span className={`live-state live-state-${view.phase}`} role="status"><span aria-hidden="true"/>
           {t(view.phase === 'idle' && captureOpen ? 'Estado de audio sin confirmar' : PHASE_LABELS[view.phase])}</span>
         <p className="live-provider">{provider}</p>
       </div>
+        <div className="live-window-controls" aria-label={t('Presentación de Live')}>
+          <button type="button" className="btn secondary" disabled={!windowState?.available || windowBusy} onClick={()=>onModeChange?.(compact ? 'expanded' : 'compact')}>
+            {compact ? <Maximize2 size={16}/> : <Minimize2 size={16}/>} {t(compact ? 'Expandir' : 'Modo compacto')}
+          </button>
+          <button type="button" className="btn secondary live-pin" data-state={onTopState === null ? 'unknown' : onTopState ? 'on' : 'off'}
+            aria-label={t('Siempre visible')} title={`${t('Siempre visible')}: ${t(pinLabel)}`}
+            aria-pressed={onTopState ?? undefined} aria-busy={onTopBusy} aria-describedby="live-pin-status"
+            disabled={!windowState?.available || windowBusy || onTopBusy} onClick={onTopChange}>
+            {onTopState === false ? <PinOff size={16} aria-hidden="true"/> : <Pin size={16} aria-hidden="true"/>}
+            <span className="live-pin-copy"><span>{t('Siempre visible')}</span><strong id="live-pin-status">{t(pinLabel)}</strong></span>
+          </button>
+        </div>
         <div className="live-actions">
           <button className="btn primary" disabled={!bridge || !nativeReady || captureBusy} onClick={() => void openCapture()}>
-            <Headphones size={16} aria-hidden="true"/>{t(captureBusy ? 'Actualizando…' : captureOpen ? 'Mostrar controles' : 'Preparar captura')}
+            <Headphones size={16} aria-hidden="true"/>{t(captureBusy ? 'Actualizando…' : captureOpen ? compact ? 'Controles' : 'Mostrar controles' : 'Preparar captura')}
           </button>
           <button className="btn secondary" disabled={!captureOpen || captureBusy} onClick={() => void closeCapture()}>
             <Square size={14} aria-hidden="true"/> {t('Detener y cerrar')}
           </button>
         </div>
     </header>
-      <p className={`live-status-detail ${view.phase === 'error' ? 'live-error-text' : ''}`} role={view.phase === 'error' ? 'alert' : undefined}>
+    <details className="panel live-appearance">
+      <summary>{t('Aspecto del overlay')}</summary>
+      <div className="live-background-controls">
+        {!compact && <span>{t('Activa Modo compacto para ajustar la transparencia del fondo.')}</span>}
+        <label>{t('Opacidad en modo compacto')} <input type="range" min="80" max="100" step="1"
+          value={Math.round((windowState?.backgroundOpacity ?? 1)*100)}
+          disabled={!compact || !windowState?.transparencyAvailable || windowBusy}
+          onChange={event=>onOpacityChange?.(Number(event.target.value)/100)}/>
+          <output>{Math.round((windowState?.backgroundOpacity ?? 1)*100)}%</output></label>
+        <button type="button" className="btn secondary" disabled={!windowState?.available || windowBusy} onClick={()=>onOpacityChange?.(1)}>{t('Fondo opaco')}</button>
+        <span>{t(windowState?.transparencyAvailable ? 'Solo cambia el fondo; el texto permanece opaco.' : 'Transparencia no disponible; se usa fondo opaco.')}</span>
+        {windowState?.transparencyAvailable && <span>{t('Para redimensionar, selecciona Fondo opaco. El modo expandido siempre es opaco.')}</span>}
+      </div>
+    </details>
+      <p className={`live-status-detail ${view.phase === 'error' ? 'live-error-text' : ''} ${view.phase === 'listening' ? 'live-status-redundant' : ''}`} role={view.phase === 'error' ? 'alert' : undefined}>
         {t(!bridge ? 'Abre la aplicación en Electron para usar la captura. La consulta manual sigue disponible.'
           : view.phase === 'idle' && captureOpen ? 'Consulta los controles de audio para confirmar la captura.' : view.status)}
       </p>
 
     <div className="live-results">
-      <section className="panel live-suggestions" aria-labelledby="live-answers-title">
-        <div className="panel-title"><div><h2 id="live-answers-title">{t('Respuestas y sugerencias')}</h2><span className="hint">{t('Documentos primero · IA sin verificar')}</span></div></div>
-        <div className="live-feed-scroll" tabIndex={0} role="region" aria-label={t('Historial de respuestas')}>
-          {view.suggestions.map(item => <LiveSuggestion item={item.event} key={item.id}/>)}
-          {!view.suggestions.length && <div className="live-feed-empty"><CircleHelp size={26} aria-hidden="true"/><h3>{t('Tu respuesta, con contexto')}</h3>
-            <p>{t('Las preguntas completas activan la búsqueda en tus documentos. Si no hay evidencia, Ollama solo puede sugerir si está habilitado.')}</p></div>}
-        </div>
-      </section>
+    <section className="panel live-current live-answer-column" aria-labelledby="live-current-title">
+      <div className="panel-title"><h2 id="live-current-title">{t('Preguntas y respuestas')}</h2></div>
+      <div className="live-current-feed" tabIndex={0} role="region" aria-label={t('Cola de preguntas y respuestas')}>
+        {view.suggestions.length > 0 ? view.suggestions.map(item => <LiveSuggestion key={item.id}
+          item={item.event} generated={item.generated} failure={item.generationFailure} generationState={item.generationState}/>)
+          : <div className="live-feed-empty"><CircleHelp size={24} aria-hidden="true"/><h3>{t('Esperando una pregunta completa…')}</h3>
+          <p>{t('Las preguntas completas activan la búsqueda en tus documentos. Si no hay evidencia, Ollama solo puede sugerir si está habilitado.')}</p></div>}
+      </div>
+    </section>
+
+      <span className="visually-hidden" role="status" aria-atomic="true">{view.transcript[0]
+        ? `${t('Transcripción confirmada')}: ${view.transcript[0].text}` : ''}</span>
       <section className="panel live-transcript" aria-labelledby="live-transcript-title">
-        <div className="panel-title"><div><h2 id="live-transcript-title">{t('Transcripción')}</h2><span className="hint">{t('Lo más reciente arriba')}</span></div><AudioLines size={18} aria-hidden="true"/></div>
-        <span className="visually-hidden" role="status" aria-atomic="true">{view.transcript[0]?.text ?? ''}</span>
-        <div className="live-feed-scroll" tabIndex={0} role="region" aria-label={t('Historial de transcripción')}>
-          {view.partial && <div className="live-transcript-entry live-partial" aria-label={t('Transcripción provisional')}>
-            <span className="live-entry-label">{t('Provisional · puede cambiar')}</span><p>{view.partial}</p>
+        <h2 id="live-transcript-title" className="live-transcript-heading">{compact
+          ? <button type="button" className="live-transcript-toggle" aria-expanded={transcriptOpen}
+              aria-controls="live-transcript-feed" onClick={()=>setTranscriptOpen(open=>!open)}>
+              <ChevronRight className="live-transcript-chevron" size={14} aria-hidden="true"/>
+              {t('Transcripción')} <AudioLines size={16} aria-hidden="true"/>
+            </button>
+          : <>{t('Transcripción')} <AudioLines size={16} aria-hidden="true"/></>}</h2>
+        <div id="live-transcript-feed" className="live-feed-scroll" hidden={compact && !transcriptOpen}
+          tabIndex={0} role="region" aria-label={t('Historial de transcripción')}>
+          {view.partial && <div className="live-transcript-entry live-partial" role="group" aria-label={t('Transcripción provisional')}>
+            <span className="live-interim-label"><span className="live-listening-dot" aria-hidden="true"/>{t('Escuchando…')}</span><p>{view.partial}</p>
           </div>}
           {view.transcript.map(item => <div className="live-transcript-entry" key={item.id}>
-            <span className="live-entry-label">{t('Final')}</span><p>{item.text}</p>
+            <p><span className="visually-hidden">{t('Transcripción confirmada')}: </span>{item.text}</p>
           </div>)}
           {!view.partial && !view.transcript.length && <div className="live-feed-empty"><AudioLines size={26} aria-hidden="true"/><h3>{t('Esperando la conversación')}</h3>
             <p>{t('Los parciales se actualizan aquí. Cada fragmento final queda debajo del más reciente.')}</p></div>}
@@ -164,16 +210,17 @@ export function LiveWorkspace({showError}: {showError: (error: unknown) => void}
     </details>
     <details className="panel live-diagnostics"><summary>{t('Diagnóstico')}</summary>
       <div><p>{view.frames.toLocaleString(language)} {t('tramas PCM')}</p>
-        <p>{t('Historial en memoria: hasta 80 fragmentos finales y 20 resultados. Al volver a Live solo se restaura el historial nativo disponible.')}</p></div>
+        <p>{t('Historial en memoria: hasta 80 fragmentos finales y 20 preguntas. Al volver a Live solo se restaura el historial nativo disponible.')}</p></div>
     </details>
     </div>
 
+    <details className="live-privacy" open={!compact}><summary>{t('Privacidad y límites')}</summary>
     <footer className="live-privacy-note"><Shield size={16}/><p>
       {t('Captura toda la salida de Windows. Autoriza e inicia en la ventana de audio.')}
       {' '}{t('Principal:')} {t(protection === null ? 'protección sin confirmar' : protection ? 'protección solicitada' : 'protección desactivada')}.
       {' '}{t('La ventana de audio no solicita exclusión. La protección es de mejor esfuerzo, no garantiza invisibilidad.')}
       {' '}{t('La aplicación no guarda audio ni transcripciones Live en disco. Deepgram transmite audio a la nube solo con consentimiento separado.')}
       {' '}{t('Durante la captura, ambas ventanas salen de la barra de tareas si la bandeja está disponible. Usa el icono de Interview Copilot en la bandeja para restaurar el workspace o mostrar controles.')}
-    </p></footer>
+    </p></footer></details>
   </div>;
 }

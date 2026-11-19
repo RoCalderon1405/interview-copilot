@@ -174,6 +174,40 @@ _DISPLAY_OBSERVATION = re.compile(
     r"visible|aparece|aparecen|muestra|muestran|ves|ver)\b|show up|se ve"
 )
 
+# Exact whole-candidate phrases only. Topic words, negations and contextual
+# suffixes must not be treated as greetings or microphone checks.
+_NON_INTERVIEW_UTTERANCES = frozenset({
+    "hello", "hi", "how are you", "how are you doing",
+    "hola", "buenos dias", "como estas", "como estan",
+    "can you hear me", "can you hear me now", "can you hear us", "do you hear me",
+    "is my microphone working", "is my mic working",
+    "me escuchas", "me oyes", "me escuchas ahora", "puedes oirme",
+    "puedes escucharme", "funciona mi microfono",
+})
+_HARMLESS_QUESTION_INTRO = re.compile(
+    r"^(?:(?:just\s+)?(?:(?:a|one)\s+)?quick\s+question|"
+    r"(?:s[oó]lo\s+)?una\s+pregunta(?:\s+r[aá]pida)?)"
+    r"(?:\s*[,;:—-]\s*|\s+)",
+    re.IGNORECASE,
+)
+
+
+def _clean_question_start(text: str) -> str:
+    """Remove one harmless introduction only before a recognizable request.
+
+    Shared by partial/final candidates, not the original transcript or shared
+    RAG normalizer. Never search arbitrary prose for an embedded question.
+    """
+    text = _QUESTION_INTRO.sub("", _LEADING_FILLER.sub("", text.strip()), count=1).strip()
+    intro = _HARMLESS_QUESTION_INTRO.match(text)
+    if intro:
+        suffix = text[intro.end():].strip()
+        key = normalize(suffix)
+        if (_EN_CUES.match(key) or _ES_CUES.match(key) or _DIRECT_QUESTION.match(key)
+                or key in _NON_INTERVIEW_UTTERANCES):
+            return suffix
+    return text
+
 
 def _is_capture_observation_request(text: str) -> bool:
     """Reject clearly operational display checks, not generic interview prompts.
@@ -214,8 +248,7 @@ def _detect_partial_questions(text: str, limit: int = MAX_QUESTION_CANDIDATES) -
     for raw in _SENTENCE_SPLIT.split(text):
         if len(candidates) >= limit:
             break
-        chunk = _LEADING_FILLER.sub("", raw.strip()).strip()
-        chunk = _QUESTION_INTRO.sub("", chunk, count=1).strip()
+        chunk = _clean_question_start(raw)
         # Natural speech: "... so here's the question when designing an API
         # how do you choose ...". Vosk emits it as one unpunctuated final.
         # Prefer the suffix after an explicit introduction; keep the context
@@ -233,9 +266,9 @@ def _detect_partial_questions(text: str, limit: int = MAX_QUESTION_CANDIDATES) -
         if not is_punctuated_question and not (_EN_CUES.match(normalized) or _ES_CUES.match(normalized)):
             continue
         candidate = chunk.rstrip(" \t?!.;,").strip()
-        if _is_capture_observation_request(candidate):
-            continue
         key = normalize(candidate)
+        if key in _NON_INTERVIEW_UTTERANCES or _is_capture_observation_request(candidate):
+            continue
         if not key or key in seen:
             continue
         seen.add(key)
@@ -275,8 +308,7 @@ def detect_questions(text: str, limit: int = MAX_QUESTION_CANDIDATES) -> list[st
                 continue
             # A bare conjunction only separates questions, not arbitrary prose.
             if boundary.group("transition") and boundary.group("transition").casefold() in {"and", "y"}:
-                preceding = scan[segment_start:boundary.start()]
-                preceding = normalize(_LEADING_FILLER.sub("", preceding.strip()))
+                preceding = normalize(_clean_question_start(scan[segment_start:boundary.start()]))
                 if (not (_EN_CUES.match(preceding) or _ES_CUES.match(preceding)
                          or _DIRECT_QUESTION.match(preceding))
                         or _SUBORDINATE_PROMPT.match(preceding)):
@@ -288,18 +320,16 @@ def detect_questions(text: str, limit: int = MAX_QUESTION_CANDIDATES) -> list[st
             # Do not let the legacy introduction fallback rediscover quoted or
             # reported questions that boundary discovery intentionally rejected.
             visible = _QUOTED_TEXT.sub(lambda match: " " * len(match.group()), segment)
-            prefix = _QUESTION_INTRO.sub("", _LEADING_FILLER.sub("", visible.strip()), count=1).strip()
+            prefix = _clean_question_start(visible)
             normalized = normalize(prefix)
             if not (_EN_CUES.match(normalized) or _ES_CUES.match(normalized)
                     or _DIRECT_QUESTION.match(normalized)
                     or visible.rstrip().endswith("?")):
                 continue
-            candidate = _QUESTION_INTRO.sub(
-                "", _LEADING_FILLER.sub("", segment.strip()), count=1
-            ).rstrip(" \t?!.;,").strip()
-            if _is_capture_observation_request(candidate):
-                continue
+            candidate = _clean_question_start(segment).rstrip(" \t?!.;,").strip()
             key = normalize(candidate)
+            if key in _NON_INTERVIEW_UTTERANCES or _is_capture_observation_request(candidate):
+                continue
             if not key or key in seen:
                 continue
             if len(candidates) >= limit:
