@@ -54,10 +54,25 @@
         <option value="mobile">Mobile Development</option>
       </select>
     </label>
-    <label class="capture-consent"><input type="checkbox" id="consent"> <span id="consent-description">Autorizo capturar todo el audio de salida de Windows y procesarlo localmente.</span></label>
+    <div class="availability-notice" data-severity="warning" id="consent-notice">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m12 3 10 18H2L12 3Zm0 5v5m0 4h.01"/></svg>
+      <div><strong>Autorización para tomar notas</strong>
+        <p>Obtén autorización para tomar notas según las reglas de la entrevista. El consentimiento de audio de la aplicación no concede permisos de Windows ni autorización de los participantes.</p>
+        <p id="consent-status" role="status" aria-atomic="true">Falta el consentimiento de audio. Revisa y marca la casilla solo si estás de acuerdo.</p>
+        <label class="capture-consent"><input type="checkbox" id="consent" aria-describedby="consent-status"> <span id="consent-description">Autorizo capturar todo el audio de salida de Windows y procesarlo localmente.</span></label>
+      </div>
+    </div>
     <section class="capture-actions" aria-label="Controles de captura">
       <div class="controls"><button id="start" disabled>Iniciar transcripción</button><button id="stop" disabled>Detener</button><button id="hide-controls" hidden>Ocultar controles sin detener</button></div>
-      <p id="status" role="status">Esperando consentimiento.</p>
+      <div id="capture-status-notice" class="availability-notice" data-severity="information" role="status" aria-live="polite" aria-atomic="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/>
+          <path data-severity-icon="information" d="M12 11v6m0-10h.01"/><path data-severity-icon="error" d="m9 9 6 6m0-6-6 6"/><path data-severity-icon="success" d="m8 12 3 3 5-6"/>
+        </svg>
+        <div><strong id="capture-status-title">Estado de captura</strong><p id="status">Esperando consentimiento.</p>
+          <p id="capture-recovery" hidden></p>
+          <button id="review-permissions" type="button" hidden>Revisar consentimiento de audio</button>
+        </div>
+      </div>
       <div class="meter" aria-hidden="true"><div id="level"></div></div>
     </section>
     <div class="capture-extras">

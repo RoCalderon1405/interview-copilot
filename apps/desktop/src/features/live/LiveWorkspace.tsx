@@ -1,5 +1,5 @@
 import {useEffect, useRef, useState} from 'react';
-import {AudioLines, CircleHelp, Headphones, Search, Shield, Square, Pin, PinOff, Minimize2, Maximize2} from 'lucide-react';
+import {AudioLines, CircleHelp, Headphones, Search, Shield, Square, Pin, PinOff, Minimize2, Maximize2, TriangleAlert, CircleX, Info} from 'lucide-react';
 import {api} from '../../api';
 import {useI18n} from '../../i18n';
 import type {AnswerResponse, LiveEvent, LiveWindowState} from '../../types';
@@ -112,6 +112,15 @@ export function LiveWorkspace({showError, windowState, windowBusy = false, onMod
     : view.provider ? `${view.provider} · Local` : t('Motor pendiente de confirmar');
   const pinLabel = onTopBusy ? 'Actualizando…' : onTopState === null ? 'Sin confirmar'
     : onTopState ? 'Activado' : 'Desactivado';
+  const needsAttention = view.phase === 'error' || view.phase === 'consent' || view.phase === 'idle';
+  const NoticeIcon = view.phase === 'error' ? CircleX : bridge ? TriangleAlert : Info;
+  const permissionIssue = view.status.includes('La solicitud de captura se canceló o fue bloqueada.');
+  const errorTitle = permissionIssue ? 'Permiso de captura no concedido' : 'Revisa la captura o la transcripción';
+  const errorRecovery = permissionIssue
+    ? 'Revisa el selector de captura y las restricciones de Windows o de tu organización. Después, vuelve a pulsar Iniciar transcripción; revisar el consentimiento no concede esos permisos.'
+    : 'Revisa los controles de audio y la disponibilidad del motor antes de volver a iniciar. No se ha confirmado una causa de permisos o autenticación.';
+  const noticeTitle = view.phase === 'error' ? errorTitle : bridge
+    ? 'Revisa la autorización y el consentimiento' : 'Captura disponible en Electron';
   return <div className={`live-workspace ${compact ? 'live-workspace-compact' : ''}`}>
     <header className="live-header">
       <div className="live-session-heading"><h1>{t('Live Interview')}</h1>
@@ -135,7 +144,7 @@ export function LiveWorkspace({showError, windowState, windowBusy = false, onMod
           <button className="btn primary" disabled={!bridge || !nativeReady || captureBusy} onClick={() => void openCapture()}>
             <Headphones size={16} aria-hidden="true"/>{t(captureBusy ? 'Actualizando…' : captureOpen ? compact ? 'Controles' : 'Mostrar controles' : 'Preparar captura')}
           </button>
-          <button className="btn secondary" disabled={!captureOpen || captureBusy} onClick={() => void closeCapture()}>
+          <button className="btn secondary live-stop" disabled={!captureOpen || captureBusy} onClick={() => void closeCapture()}>
             <Square size={14} aria-hidden="true"/> {t('Detener y cerrar')}
           </button>
         </div>
@@ -154,10 +163,22 @@ export function LiveWorkspace({showError, windowState, windowBusy = false, onMod
         {windowState?.transparencyAvailable && <span>{t('Para redimensionar, selecciona Fondo opaco. El modo expandido siempre es opaco.')}</span>}
       </div>
     </details>
-      <p className={`live-status-detail ${view.phase === 'error' ? 'live-error-text' : ''} ${view.phase === 'listening' ? 'live-status-redundant' : ''}`} role={view.phase === 'error' ? 'alert' : undefined}>
+      {needsAttention ? <div className="availability-notice live-important-notice"
+        data-severity={view.phase === 'error' ? 'error' : !bridge ? 'information' : 'warning'}
+        role={view.phase === 'error' ? 'alert' : 'status'} aria-atomic="true">
+        <NoticeIcon aria-hidden="true" focusable="false"/>
+        <div><strong>{t(noticeTitle)}</strong>
+          <p>{t(view.phase === 'idle' && captureOpen ? 'Consulta los controles de audio para confirmar la captura.'
+            : view.phase === 'error' || bridge ? view.status : 'Abre la aplicación en Electron para usar la captura. La consulta manual sigue disponible.')}</p>
+          <p>{t(view.phase === 'error' ? errorRecovery
+            : 'Obtén autorización para tomar notas según las reglas de la entrevista. El consentimiento de audio de la aplicación no concede permisos de Windows ni autorización de los participantes.')}</p>
+          {bridge && <button type="button" className="btn secondary" disabled={!nativeReady || captureBusy}
+            onClick={() => void openCapture()}>{t('Revisar controles de audio')}</button>}
+        </div>
+      </div> : <p className={`live-status-detail ${view.phase === 'listening' ? 'live-status-redundant' : ''}`}>
         {t(!bridge ? 'Abre la aplicación en Electron para usar la captura. La consulta manual sigue disponible.'
           : view.phase === 'idle' && captureOpen ? 'Consulta los controles de audio para confirmar la captura.' : view.status)}
-      </p>
+      </p>}
 
     <div className="live-results">
     <section className="panel live-current live-answer-column" aria-labelledby="live-current-title">

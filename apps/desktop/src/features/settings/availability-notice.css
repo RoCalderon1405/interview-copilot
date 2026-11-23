@@ -4,12 +4,18 @@
 .availability-notice>div{min-width:0}
 .availability-notice strong{display:block;font-size:14px;line-height:1.5}
 .availability-notice p,.capture-page .availability-notice p{color:inherit;font-size:13px;line-height:1.6;margin:6px 0 0;max-width:70ch}
-.availability-notice[data-kind=missing-credentials]{--notice-bg:#39270e;--notice-text:#ffda96;--notice-border:#d59537}
-.availability-notice[data-kind=missing-runtime]{--notice-bg:#34271e;--notice-text:#ffd1ad;--notice-border:#ba855c}
-.availability-notice[data-kind=invalid-configuration]{--notice-bg:#3b202b;--notice-text:#ffc4d3;--notice-border:#c67d91}
-.availability-notice[data-kind=unknown]{--notice-bg:#252638;--notice-text:#d5d2f3;--notice-border:#8e8aaf}
-.availability-notice[data-kind=failure]{--notice-bg:#3d2024;--notice-text:#ffc5c0;--notice-border:#da837b}
-.availability-notice[data-kind=available]{--notice-bg:#172f28;--notice-text:#a4e7c4;--notice-border:#63ab88}
+.availability-notice[data-kind=missing-credentials],.availability-notice[data-kind=missing-runtime],.availability-notice[data-severity=warning]{--notice-bg:#39270e;--notice-text:#ffda96;--notice-border:#d59537}
+.availability-notice[data-kind=invalid-configuration],.availability-notice[data-kind=failure],.availability-notice[data-severity=error]{--notice-bg:#3d2024;--notice-text:#ffc5c0;--notice-border:#da837b}
+.availability-notice[data-kind=available],.availability-notice[data-severity=success]{--notice-bg:#172f28;--notice-text:#a4e7c4;--notice-border:#63ab88}
+.availability-notice button{margin-top:10px;white-space:normal;text-align:start}
+.availability-notice :is(button,input):focus-visible{outline:2px solid currentColor;outline-offset:3px}
+.app-notice{margin-inline:24px}
+.live-important-notice{margin-block:0;flex-shrink:0}
+.live-workspace-compact .live-important-notice{padding:12px;gap:8px}
+.availability-notice [data-severity-icon]{display:none}
+.availability-notice[data-severity=information] [data-severity-icon=information],
+.availability-notice[data-severity=error] [data-severity-icon=error],
+.availability-notice[data-severity=success] [data-severity-icon=success]{display:inline}
 .availability-notice>svg>g{display:none}
 .availability-notice[data-kind=missing-credentials] [data-notice-icon=missing-credentials],
 .availability-notice[data-kind=missing-runtime] [data-notice-icon=missing-runtime],

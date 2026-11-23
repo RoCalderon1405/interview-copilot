@@ -14,7 +14,7 @@ test('compact capture keeps authorization and stop visible while diagnostics and
   for (const id of ['info', 'speech-latency', 'semantic-status']) assert.ok(disclosures[0].includes(`id="${id}"`));
   for (const id of ['questions', 'question-hint', 'partial', 'finals']) assert.ok(disclosures[1].includes(`id="${id}"`));
   const essential = html.replace(/<details\b[\s\S]*?<\/details>/g, '');
-  for (const id of ['provider', 'language', 'vocabulary-profile', 'consent', 'consent-description', 'start', 'stop', 'status', 'speech-status']) {
+  for (const id of ['provider', 'language', 'vocabulary-profile', 'consent', 'consent-description', 'consent-status', 'capture-status-notice', 'start', 'stop', 'status', 'speech-status']) {
     assert.ok(essential.includes(`id="${id}"`), `${id} must not be inside a disclosure`);
     assert.equal(html.split(`id="${id}"`).length - 1, 1);
   }
@@ -24,7 +24,7 @@ test('compact capture keeps authorization and stop visible while diagnostics and
   assert.doesNotMatch(essential, /id="consent"[^>]*\bchecked\b/);
 });
 
-function harness({selected = 'vosk', available = true, deferCapture = false, bridge = false, deferWorklet = false,
+function harness({selected = 'vosk', available = true, deferCapture = false, bridge = false, deferWorklet = false, captureError,
   deepgram, uiLanguage = 'es', liveStatus, availabilitySignal = () => new AbortController().signal} = {}) {
   const elements = new Map();
   const calls = [];
@@ -36,7 +36,8 @@ function harness({selected = 'vosk', available = true, deferCapture = false, bri
     if (!elements.has(id)) elements.set(id, {
       value: id === 'provider' ? selected : id === 'language' ? 'en-US' : id === 'vocabulary-profile' ? 'general' : '',
       disabled: id === 'vocabulary-profile' && selected !== 'deepgram', checked: id === 'consent', textContent: '', style: {}, dataset: {}, handlers: {},
-      addEventListener(type, handler) { this.handlers[type] = handler; },
+       addEventListener(type, handler) { this.handlers[type] = handler; },
+       focus() { calls.push(['focus',id]); },
       replaceChildren() {}, appendChild() {},
     });
     return elements.get(id);
@@ -78,7 +79,8 @@ function harness({selected = 'vosk', available = true, deferCapture = false, bri
     }, ...(bridge ? {copilotCapture:{publish:packet=>packets.push(packet),hideControls:async()=>true,
       openDeepgramSettings:async()=>{calls.push('open-settings');return true;}}} : {})},
     navigator: {mediaDevices: {getDisplayMedia(options) {
-      calls.push(['capture', options]);
+       calls.push(['capture', options]);
+       if(captureError){const error=captureError;captureError=null;return Promise.reject(error);}
       const captured = {getAudioTracks: () => [track], getTracks: () => [track]};
       return deferCapture ? new Promise(resolve => { resolveCapture = () => resolve(captured); }) : Promise.resolve(captured);
     }}},
@@ -98,6 +100,34 @@ function harness({selected = 'vosk', available = true, deferCapture = false, bri
   vm.runInNewContext(script, context);
   return {element, calls, sockets, packets, worklets, contexts, statuses, advance:ms=>{now+=ms;},resolveWorklet:()=>resolveWorklet(), resolveCapture: () => resolveCapture()};
 }
+
+test('consent and capture-denial notices guide recovery in EN/ES without granting external or OS permissions', async()=>{
+  for(const uiLanguage of ['es','en']) {
+    const error=new Error('browser-specific denial');error.name='NotAllowedError';
+    const h=harness({selected:'deepgram',bridge:true,uiLanguage,captureError:error});
+    h.element('consent').checked=false;h.element('consent').handlers.change();
+    assert.match(h.element('consent-status').textContent,uiLanguage==='en'?/Consent to send audio to Deepgram is required/:/Falta el consentimiento para enviar audio a Deepgram/);
+    await h.element('start').handlers.click();
+    assert.ok(!h.calls.some(call=>Array.isArray(call)&&call[0]==='capture'));
+    h.element('consent').checked=true;h.element('consent').handlers.change();
+    assert.match(h.element('consent-status').textContent,uiLanguage==='en'?/does not establish external authorization/:/No acredita autorización externa/);
+    await h.element('start').handlers.click();
+    assert.equal(h.element('capture-status-notice').dataset.severity,'error');
+    assert.match(h.element('status').textContent,uiLanguage==='en'?/app cannot grant Windows permissions/:/aplicación no puede conceder permisos de Windows/);
+    assert.equal(h.sockets.length,0);
+    await h.element('refresh-provider').handlers.click();
+    assert.equal(h.element('capture-status-notice').dataset.severity,'error');
+    h.element('review-permissions').handlers.click();
+    assert.deepEqual(h.calls.at(-1),['focus','consent']);
+    assert.equal(h.element('consent').checked,true);assert.equal(h.sockets.length,0);
+    await h.element('start').handlers.click();
+    h.sockets[0].onmessage({data:JSON.stringify({type:'ready',provider:'deepgram',language:'en-US',sample_rate:16000,sample_format:'pcm_s16le',channels:1})});
+    await new Promise(setImmediate);
+    assert.equal(h.element('capture-status-notice').dataset.severity,'success');
+    assert.equal(h.element('capture-recovery').hidden,true);
+    assert.equal(h.element('review-permissions').hidden,true);
+  }
+});
 
 test('Deepgram unavailable causes and start failures are actionable in EN/ES without remote validation claims', async () => {
   const cases = [

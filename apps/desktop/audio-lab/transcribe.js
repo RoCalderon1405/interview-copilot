@@ -51,6 +51,12 @@ const openSettings = document.getElementById('open-settings');
 const settingsHint = document.getElementById('settings-hint');
 const speechLatency = document.getElementById('speech-latency');
 const status = document.getElementById('status');
+const captureStatusNotice = document.getElementById('capture-status-notice');
+const captureStatusTitle = document.getElementById('capture-status-title');
+const captureRecovery = document.getElementById('capture-recovery');
+const consentStatus = document.getElementById('consent-status');
+const reviewPermissions = document.getElementById('review-permissions');
+reviewPermissions.addEventListener('click', () => { consent.focus(); });
 const level = document.getElementById('level');
 const info = document.getElementById('info');
 const partial = document.getElementById('partial');
@@ -75,6 +81,10 @@ function updateConsent() {
   uiText(consentDescription, isCloud()
     ? 'Autorizo capturar todo el audio de salida de Windows y enviarlo mediante el backend a Deepgram (nube, con posibles cargos y tratamiento conforme a la política del proveedor).'
     : 'Autorizo capturar todo el audio de salida de Windows y procesarlo localmente.');
+  uiText(consentStatus, consent.checked
+    ? 'Consentimiento de audio seleccionado. No acredita autorización externa. Pulsa Iniciar transcripción cuando estés listo.'
+    : isCloud() ? 'Falta el consentimiento para enviar audio a Deepgram. Revisa los posibles cargos y marca la casilla solo si estás de acuerdo.'
+      : 'Falta el consentimiento de audio. Revisa y marca la casilla solo si estás de acuerdo.');
 }
 updateConsent();
 function publish(packet) {
@@ -82,11 +92,18 @@ function publish(packet) {
   window.copilotCapture?.publish(packet);
 }
 function setStatus(text) {
+  const failed = text.startsWith('FALLO:');
+  const ready = /^(Vosk|Faster-Whisper|Deepgram Nova-3) listo\./.test(text);
+  captureStatusNotice.dataset.severity = failed ? 'error' : ready ? 'success' : 'information';
+  uiText(captureStatusTitle, failed ? 'Revisa la captura o la transcripción' : ready ? 'Audio conectado' : 'Estado de captura');
+  captureRecovery.hidden = !failed;
+  reviewPermissions.hidden = !failed;
+  if (failed) uiText(captureRecovery, 'Revisa los controles de audio y la disponibilidad del motor antes de volver a iniciar. No se ha confirmado una causa de permisos o autenticación.');
   uiText(status,text);
   publish({type:'status',text});
 }
 
-consent.addEventListener('change', () => { start.disabled = busy || !consent.checked; });
+consent.addEventListener('change', () => { start.disabled = busy || !consent.checked; updateConsent(); });
 
 async function updateSemanticStatus() {
   try {
@@ -227,10 +244,24 @@ async function cleanup() {
 }
 
 async function fail(error) {
-  const message = error instanceof Error ? error.message : String(error);
+  const permissionIssue = ['NotAllowedError','SecurityError'].includes(error?.name);
+  const message = permissionIssue
+    ? 'La solicitud de captura se canceló o fue bloqueada. La aplicación no puede conceder permisos de Windows.'
+    : error?.name === 'NotFoundError' ? 'Windows no devolvió ninguna pista de audio'
+      : error instanceof Error ? error.message : String(error);
   const revision = await cleanup();
   if (revision !== captureRevision) return;
   setStatus(`FALLO: ${message}`);
+  // Only classify known browser capture errors; provider failures do not prove
+  // a permission denial or an invalid credential. IPC keeps its existing schema.
+  if (permissionIssue) {
+    uiText(captureStatusTitle, 'Permiso de captura no concedido');
+    uiText(status, message);
+    uiText(captureRecovery, 'Revisa el selector de captura y las restricciones de Windows o de tu organización. Después, vuelve a pulsar Iniciar transcripción; revisar el consentimiento no concede esos permisos.');
+  } else if (error?.name === 'NotFoundError' || message === 'Windows no devolvió ninguna pista de audio') {
+    uiText(captureStatusTitle, 'Audio del sistema no disponible');
+    uiText(captureRecovery, 'Revisa la salida de audio y la selección de captura de Windows. Después, vuelve a pulsar Iniciar transcripción.');
+  }
   publish({type:'error',text:message});
   publishPhase('error');
 }

@@ -1,5 +1,5 @@
 import {useEffect, useRef, useState} from 'react';
-import {KeyRound, TriangleAlert, Cpu, OctagonAlert, CircleHelp, CircleX, Clock, CircleCheck} from 'lucide-react';
+import {KeyRound, TriangleAlert, Cpu, OctagonAlert, CircleHelp, CircleX, Clock, CircleCheck, Info} from 'lucide-react';
 import {api} from '../../api';
 import {useI18n} from '../../i18n';
 import type {DeepgramAvailability, DeepgramKeyResult} from '../../types';
@@ -49,6 +49,7 @@ export function DeepgramSettings() {
   const [busy,setBusy]=useState(false);
   const [confirmDelete,setConfirmDelete]=useState(false);
   const [note,setNote]=useState('');
+  const [noteSeverity,setNoteSeverity]=useState<'information'|'warning'|'error'|'success'>('information');
   const [statusNote,setStatusNote]=useState('');
   const [availabilityNote,setAvailabilityNote]=useState('Actualizando disponibilidad…');
   const [availabilityKind,setAvailabilityKind]=useState<NoticeKind>('loading');
@@ -104,14 +105,17 @@ export function DeepgramSettings() {
     if(working.current || !window.copilotDesktop)return;
     working.current=true;setBusy(true);setStatusNote('');setConfirmDelete(false);serial.current++;
     setNote(action==='delete'?'Eliminando clave guardada…':action==='replace'?'Esperando el reemplazo en Windows…':'Esperando la configuración en Windows…');
+    setNoteSeverity('information');
     try {
       const result=await window.copilotDesktop.manageDeepgramKey(action);
       if(alive.current){
+        setNoteSeverity(['configured','deleted'].includes(result?.result) ? 'success'
+          : ['error','timed_out'].includes(result?.result) ? 'error' : 'warning');
         setNote(result?.result==='configured' && action==='replace'?'Clave reemplazada en Windows.'
           : OUTCOMES[result?.result] ?? UNKNOWN_OUTCOME);
         await readStatus();
       }
-    }catch{if(alive.current)setNote(OUTCOMES.error);}
+    }catch{if(alive.current){setNote(OUTCOMES.error);setNoteSeverity('error');}}
     finally{working.current=false;if(alive.current)setBusy(false);}
   };
   const sourceCopy:Record<string,string>={
@@ -121,6 +125,7 @@ export function DeepgramSettings() {
     error:'El backend no puede leer la configuración de credenciales.',unknown:'Estado del backend sin confirmar. Comprueba que esté conectado.',
   };
   const NoticeIcon=NOTICE_ICONS[availabilityKind];
+  const OutcomeIcon=noteSeverity==='success'?CircleCheck:noteSeverity==='error'?CircleX:noteSeverity==='warning'?TriangleAlert:Info;
   return <section className="panel credential-settings" aria-labelledby="deepgram-settings-title" aria-busy={busy}>
     <div className="panel-title"><h2 id="deepgram-settings-title" tabIndex={-1}>{t('API Key de Deepgram')}</h2><KeyRound size={18} aria-hidden="true"/></div>
     <p>{t('Introduce la clave solo en el diálogo de Windows, en el campo Contraseña. Nunca introduzcas tu contraseña de Windows.')}</p>
@@ -129,19 +134,22 @@ export function DeepgramSettings() {
     <p className="small-muted"><strong>{t('Verificación remota: no realizada.')}</strong> {t('Este estado solo comprueba la configuración local, no la autenticación con Deepgram.')}</p>
     <div className="availability-notice" data-kind={availabilityKind} role="status" aria-live="polite" aria-atomic="true">
       <NoticeIcon aria-hidden="true" focusable="false"/>
-      <div><strong>{t(NOTICE_TITLES[availabilityKind])}</strong><p>{t(availabilityNote)}</p></div>
+      <div><strong>{t(NOTICE_TITLES[availabilityKind])}</strong><p>{t(availabilityNote)}</p>
+        <p>{t(statusNote)}</p></div>
     </div>
     <div className="credential-actions">
       <button className="btn primary" disabled={!available || stored===null || busy} onClick={()=>void run(stored?'replace':'configure')}>{t(stored?'Reemplazar clave':'Configurar clave')}</button>
       <button className="btn secondary" disabled={!available || !stored || busy} onClick={()=>setConfirmDelete(true)}>{t('Eliminar clave guardada')}</button>
       <button className="btn secondary" disabled={busy} onClick={()=>{setConfirmDelete(false);void refresh();}}>{t('Actualizar disponibilidad')}</button>
     </div>
-    <p role="status" aria-live="polite" aria-atomic="true">{t(note)}</p>
-    <p role="status" aria-live="polite" aria-atomic="true">{t(statusNote)}</p>
+    {note && <div className="availability-notice" data-severity={noteSeverity} role="status" aria-live="polite" aria-atomic="true">
+      <OutcomeIcon aria-hidden="true" focusable="false"/><div><strong>{t(noteSeverity==='success'?'Operación completada'
+        :noteSeverity==='error'?'Resultado sin confirmar':noteSeverity==='warning'?'Revisa la operación':'Estado de la operación')}</strong><p>{t(note)}</p></div>
+    </div>}
     {confirmDelete && <div role="group" aria-label={t('Confirmar eliminación de clave')}>
       <p>{t('¿Eliminar la clave guardada en Windows? Esto no elimina la variable de entorno ni revoca la clave en Deepgram.')}</p>
       <div className="credential-actions"><button className="btn secondary" onClick={()=>void run('delete')}>{t('Confirmar eliminación')}</button>
-        <button className="btn secondary" onClick={()=>{setConfirmDelete(false);setNote('Eliminación cancelada. La clave guardada no cambia.');}}>{t('Conservar clave')}</button></div>
+        <button className="btn secondary" onClick={()=>{setConfirmDelete(false);setNoteSeverity('information');setNote('Eliminación cancelada. La clave guardada no cambia.');}}>{t('Conservar clave')}</button></div>
     </div>}
     <p className="small-muted">{t('Cierra todas las ventanas de audio, incluido el laboratorio, antes de editar. Puedes cancelar la entrada en el diálogo de Windows.')}</p>
     <p className="small-muted">{t('Guardar una clave no verifica acceso ni facturación. No activa Deepgram ni autoriza enviar audio; Vosk sigue predeterminado.')}</p>

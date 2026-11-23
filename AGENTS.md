@@ -20,10 +20,10 @@
 - Bound streaming buffers and background lifetimes; cancel or suppress obsolete results on replacement, stop, disconnect or session finish, then release resources safely.
 
 ## Test discipline
-- Keep tests minimal and meaningful. Each case must protect a distinct contract, boundary, risk or regression; remove duplicates without losing that protection.
+- Prefer a small number of meaningful, focused tests for changed behavior. Each case must protect a distinct contract, boundary, risk or regression; avoid redundant cases, unnecessary mocks and excessive testing infrastructure while preserving essential security and regression coverage.
 - Test observable behavior rather than object identity or incidental implementation details. Do not add tests merely to increase test counts or coverage percentages.
 - Prefer deterministic checks and existing evidence before real-model evaluations. Define an explicit evaluation budget, including warmups and failed attempts; do not repeat benchmarks for test-only or documentation changes.
-- Run focused checks first, then necessary regressions. Report removed redundancy, preserved protections and actual results; mocks do not establish real-model or Windows acceptance.
+- Run focused checks first, then necessary regressions. For documentation-only changes, run only relevant documentation checks, not full application suites. Report removed redundancy, preserved protections and actual results; mocks do not establish real-model or Windows acceptance.
 
 ## Security and product invariants
 - Windows system-audio capture includes **all Windows output**. Require informed consent and a real click **inside the isolated, nonpersistent capture window**. The main Electron renderer remains sandboxed without capture permissions.

@@ -43,6 +43,10 @@
 .live-workspace .btn.primary{background:#4d5cbb;border-color:#8999ee}
 .live-workspace .btn.primary:hover{background:#5968c7}
 .live-workspace .btn.secondary{background:var(--live-surface);border-color:#40506a}
+.live-workspace .btn.live-stop{background:#b42332;border-color:#ee8791;color:#fff}
+.live-workspace .btn.live-stop:not(:disabled):hover{background:#cf3343}
+.live-workspace .btn.live-stop:focus-visible{outline:2px solid #ffb4ba;outline-offset:3px}
+.live-workspace .btn.live-stop:disabled{background:#51252b;border-color:#a47179;color:#e0bbc0;opacity:1;cursor:not-allowed}
 .live-workspace :is(button,textarea,summary):focus-visible{outline:2px solid var(--live-accent);outline-offset:3px}
 .live-status-detail{font-size:12px;line-height:1.5;color:var(--live-muted);margin:0;overflow-wrap:anywhere;flex-shrink:0}
 .live-status-detail.live-error-text{color:#ffb5ad}
@@ -114,6 +118,11 @@ html.live-overlay,html.live-overlay body,html.live-overlay #root{background:tran
 .native-window-actions button{display:grid;place-items:center;min-width:36px;min-height:36px;color:#e8edf5;background:transparent;border:1px solid #40506a;border-radius:6px}
 .native-window-actions button:hover{background:#29364d}
 .native-window-actions button:focus-visible{outline:2px solid #aab7ff;outline-offset:2px}
+/* The existing window controls are ordered Minimize, Close. */
+.native-window-actions button:last-child{background:#29191f;border-color:#d87983;color:#ffc5c0}
+.native-window-actions button:last-child:not(:disabled):hover{background:#48232b}
+.native-window-actions button:last-child:focus-visible{outline-color:#ffb4ba}
+.native-window-actions button:last-child:disabled{background:#271e24;border-color:#805e67;color:#bf9fa5;opacity:1;cursor:not-allowed}
 .live-window-controls{display:flex;gap:8px;flex-wrap:wrap}
 .live-pin-copy{display:flex;flex-direction:column;align-items:flex-start;gap:2px;line-height:1.25}
 .live-pin-copy strong{font-size:12px;font-weight:600;color:var(--live-muted)}

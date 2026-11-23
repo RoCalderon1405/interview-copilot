@@ -116,7 +116,8 @@ test('credential operations keep localized success when subsequent Windows/backe
       const expected=action==='configure'?['Key saved in Windows.','Clave guardada en Windows.']
         :action==='replace'?['Key replaced in Windows.','Clave reemplazada en Windows.']
         :['Stored key deleted.','Clave guardada eliminada.'];
-      assert.ok(html.includes(expected[language==='en'?0:1]));
+       assert.ok(html.includes(expected[language==='en'?0:1]));
+       assert.match(html,/data-severity="success"/);
       assert.match(html,language==='en'?/Windows status could not be refreshed/:/No se pudo actualizar el estado de Windows/);
       assert.match(html,language==='en'?/Backend status unconfirmed/:/Estado del backend sin confirmar/);
       assert.doesNotMatch(html,/private native detail|private backend detail/);
@@ -238,7 +239,7 @@ test('shared availability palette meets text and icon contrast and provides non-
     return rgb[0]*0.2126+rgb[1]*0.7152+rgb[2]*0.0722;
   };
   const palettes=[...css.matchAll(/--notice-bg:(#[a-f\d]{6});--notice-text:(#[a-f\d]{6});--notice-border:(#[a-f\d]{6})/g)];
-  assert.equal(palettes.length,7);
+  assert.equal(palettes.length,4); // One consistent palette per severity, not per cause.
   for(const [,bg,text,border] of palettes){
     const ratio=(a,b)=>(Math.max(luminance(a),luminance(b))+0.05)/(Math.min(luminance(a),luminance(b))+0.05);
     assert.ok(ratio(bg,text)>=4.5,`${bg}/${text}`);
@@ -331,6 +332,24 @@ function renderState(view) {
   });
   return renderToStaticMarkup(React.createElement(Workspace,{showError:()=>{}}));
 }
+test('important Live notices remain visible in both modes and languages without granting or dismissing consent',()=>{
+  try {for(language of ['es','en'])for(const mode of ['compact','expanded']) {
+    const view=receiveLiveEvent(initialLiveState,{type:'status',text:'Confirma la captura en la ventana de audio.'});
+    const {LiveWorkspace:Workspace}=load('LiveWorkspace.tsx',{
+      '../../api':{api:{}},'./LiveSuggestion':{LiveSuggestion},'../../i18n':i18n,
+      './liveState':{initialLiveState:view,receiveLiveEvent,restoreLiveState},
+    },{window:{copilotDesktop:{}}});
+    const html=renderToStaticMarkup(React.createElement(Workspace,{showError:()=>{},windowState:{mode}}));
+    const notice=html.match(/<div class="availability-notice live-important-notice"[\s\S]*?<\/div><\/div>/)?.[0];
+    assert.ok(notice);assert.match(notice,/data-severity="warning" role="status" aria-atomic="true"/);
+    assert.match(notice,language==='en'?/does not grant Windows permissions or participant authorization/:/no concede permisos de Windows ni autorización de los participantes/);
+    assert.match(notice,language==='en'?/Review audio controls/:/Revisar controles de audio/);
+    assert.doesNotMatch(notice,/<input|Cerrar|Close|Grant permission/);
+    const error=renderState(receiveLiveEvent(view,{type:'error',text:'Falló la conexión WebSocket con STT'}));
+    assert.match(error,/data-severity="error" role="alert"/);
+    assert.match(error,language==='en'?/A permission or authentication cause has not been confirmed/:/No se ha confirmado una causa de permisos o autenticación/);
+  }}finally{language='es';}
+});
 test('generated answers show unverified AI provenance, not documentary attribution',()=>{
   const documentary={type:'suggestion',session_id:'s',question_id:'s:1',question:'Explain caching?',
     status:'no_evidence',answer:null,source:null,match_type:null};

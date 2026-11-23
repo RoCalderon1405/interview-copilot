@@ -19,17 +19,19 @@
 .capture-page select:disabled{color:#a7b5c9;opacity:.7}
 .capture-page .capture-profile{display:none;margin:12px 0}
 .capture-page:has(#provider option[value="deepgram"]:checked) .capture-profile{display:flex}
-.capture-page .capture-consent{flex-direction:row;align-items:flex-start;gap:10px;margin:16px 0;padding:12px;background:#182232;border:1px solid #40506a;border-radius:10px;font-size:13px;font-weight:400;line-height:1.5}
+.capture-page .capture-consent{flex-direction:row;align-items:flex-start;gap:10px;margin:12px 0 0;font-size:13px;font-weight:400;line-height:1.5;color:inherit}
 .capture-consent input{accent-color:#aab7ff;width:18px;height:18px;flex-shrink:0;margin:1px 0 0}
 .capture-actions{position:sticky;top:0;z-index:1;background:#0c111b;padding:8px 0}
 .capture-page .controls{gap:8px;flex-wrap:wrap}
 .capture-page button{min-height:42px;font:inherit;font-size:13px;font-weight:600;border:1px solid #8999ee;border-radius:8px;background:#4d5cbb;padding:10px 16px}
 .capture-page button:not(:disabled):hover{background:#5968c7}
-.capture-page #stop{background:#121a27;border-color:#40506a;color:#e8edf5}
-.capture-page #stop:not(:disabled):hover{background:#182232}
+.capture-page #stop{background:#b42332;border-color:#ee8791;color:#fff}
+.capture-page #stop:not(:disabled):hover{background:#cf3343}
 .capture-page button:disabled{opacity:.55}
+.capture-page #stop:disabled{background:#51252b;border-color:#a47179;color:#e0bbc0;opacity:1;cursor:not-allowed}
 .capture-page :is(button,select,input,summary):focus-visible{outline:2px solid #aab7ff;outline-offset:3px}
-.capture-page #status{font-size:13px;color:#e8edf5;margin:10px 0}
+.capture-page #stop:focus-visible{outline-color:#ffb4ba}
+.capture-page #status{font-size:13px;color:inherit;margin:6px 0 0}
 .capture-page .meter{height:4px;margin:8px 0;background:#2b384b;border-radius:4px}
 .capture-page .meter #level{background:#93dfbc}
 .capture-extras{display:grid;gap:8px;margin-top:8px}

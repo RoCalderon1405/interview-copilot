@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import {
   AudioLines, BookOpen, Check, ChevronRight, CircleHelp, File, FileSpreadsheet, FileText,
   GraduationCap, Headphones, LayoutDashboard, LockKeyhole, Plus, Search,
-  Send, Settings, Shield, Sparkles, Trash2, UploadCloud, WifiOff, X, Minus,
+  Send, Settings, Shield, Sparkles, Trash2, UploadCloud, WifiOff, X, Minus, TriangleAlert, CircleX,
 } from 'lucide-react';
 import { api } from './api';
 import {LiveWorkspace} from './features/live/LiveWorkspace';
@@ -125,9 +125,14 @@ export default function App() {
     </aside>
     <main className="main-area">
        <div className="topbar"><div className="breadcrumb">{t('WORKSPACE')} <ChevronRight size={13}/> <strong>{t(NAV.find(n=>n.id===page)?.label ?? '')}</strong></div><span className="overlay-brand">Interview Copilot</span><div className="topbar-tools"><label className="ui-language"><span>{t('Idioma de interfaz')}</span><select value={language} onChange={event=>setLanguage(event.target.value === 'en' ? 'en' : 'es')} title={t('El idioma de interfaz no cambia el idioma de transcripción ni de la IA.')}><option value="en">EN — English</option><option value="es">ES — Español</option></select></label><div className={`status ${connected ? 'online':'offline'}`}>{connected ? <Check size={14}/> : <WifiOff size={14}/>} {t(connected ? 'API connected' : 'API offline')}</div>{nativeWindow?.customFrame && <div className="native-window-actions"><button type="button" title={t('Minimizar ventana')} aria-label={t('Minimizar ventana')} onClick={()=>{void window.copilotDesktop?.minimizeWindow().catch(()=>{});}}><Minus size={16}/></button><button type="button" title={t('Cerrar aplicación y detener captura')} aria-label={t('Cerrar aplicación y detener captura')} onClick={()=>{void window.copilotDesktop?.closeWindow().catch(()=>{});}}><X size={16}/></button></div>}</div></div>
-       {!saved && <div role="status" className="alert">{t('No se pudo guardar el idioma. Se aplicará solo hasta cerrar esta ventana.')}</div>}
-       {error && <div role="alert" className="alert error"><CircleHelp size={17}/>{t(error)}<button onClick={()=>setError('')} aria-label={t('Cerrar')}><X size={16}/></button></div>}
-       {notice && <div role="status" className="alert success"><Check size={17}/>{t(notice)}<button onClick={()=>setNotice('')} aria-label={t('Cerrar')}><X size={16}/></button></div>}
+       {!saved && <div role="status" aria-atomic="true" className="availability-notice app-notice" data-severity="warning">
+         <TriangleAlert aria-hidden="true"/><div><strong>{t('Preferencia sin guardar')}</strong><p>{t('No se pudo guardar el idioma. Se aplicará solo hasta cerrar esta ventana.')}</p></div></div>}
+       {error && <div role="alert" aria-atomic="true" className="availability-notice app-notice" data-severity="error">
+         <CircleX aria-hidden="true"/><div><strong>{t('Requiere atención')}</strong><p>{t(error)}</p>
+           <button type="button" className="btn secondary" onClick={()=>setError('')}>{t('Cerrar')}</button></div></div>}
+       {notice && <div role="status" aria-atomic="true" className="availability-notice app-notice" data-severity="success">
+         <Check aria-hidden="true"/><div><strong>{t('Operación completada')}</strong><p>{t(notice)}</p>
+           <button type="button" className="btn secondary" onClick={()=>setNotice('')}>{t('Cerrar')}</button></div></div>}
       <div className={`content ${page === 'live' ? 'content-live' : ''}`}>
         {page === 'overview' && <Overview docs={documents} navigate={navigate}/>}
         {page === 'knowledge' && <Knowledge docs={documents} onUpload={onUpload} refresh={refresh} showError={showError} onNotice={setNotice}/>}
