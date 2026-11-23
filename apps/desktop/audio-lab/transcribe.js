@@ -29,6 +29,26 @@ const language = document.getElementById('language');
 const provider = document.getElementById('provider');
 const vocabularyProfile = document.getElementById('vocabulary-profile');
 const speechStatus = document.getElementById('speech-status');
+const availabilityNotice = document.getElementById('availability-notice');
+const speechStatusTitle = document.getElementById('speech-status-title');
+function notice(kind, title) {
+  availabilityNotice.dataset.kind = kind;
+  uiText(speechStatusTitle, title);
+}
+function updateAvailabilityNotice(selected, selectedProvider, selectedLanguage) {
+  if(selectedProvider!=='deepgram') {
+    const ready=Boolean(selected?.languages?.[selectedLanguage]?.available);
+    notice(ready?'available':'unknown',ready?'Motor disponible':'Motor no disponible');
+  } else if(selected?.runtime_installed===false) notice('missing-runtime','Falta una dependencia de Deepgram');
+  else if(selected?.configuration_error==='invalid_environment') notice('invalid-configuration','Configuración local inválida');
+  else if(selected?.configured===false && selected.credential_source==='none') notice('missing-credentials','Falta la clave de Deepgram');
+  else if(selected?.configuration_error || selected?.credential_source==='error') notice('invalid-configuration','Configuración local inválida');
+  else if(selected?.configured===true && selected?.languages?.[selectedLanguage]?.available) notice('available','Deepgram configurado localmente');
+  else notice('unknown','Disponibilidad sin confirmar');
+}
+const refreshProvider = document.getElementById('refresh-provider');
+const openSettings = document.getElementById('open-settings');
+const settingsHint = document.getElementById('settings-hint');
 const speechLatency = document.getElementById('speech-latency');
 const status = document.getElementById('status');
 const level = document.getElementById('level');
@@ -81,19 +101,60 @@ async function updateSemanticStatus() {
 }
 void updateSemanticStatus();
 
+// Status describes local readiness only. The backend does not report remote auth
+// verification and deliberately maps connection failures to one generic code.
+function deepgramStatus(selected, selectedLanguage) {
+  if (selected?.runtime_installed === false) return 'Falta la dependencia websockets de Deepgram en el backend. Instálala en el entorno del backend y reinícialo. Cambiar la API Key no resuelve esta causa.';
+  if (selected?.configuration_error === 'invalid_environment') return 'COPILOT_DEEPGRAM_API_KEY del backend es inválida y tiene prioridad sobre la clave de Windows. Corrige o elimina la variable del entorno de inicio y reinicia el backend; cambiar la clave de Windows no elimina esta prioridad.';
+  if (selected?.configured === false && selected.credential_source === 'none') return 'No hay una API Key de Deepgram configurada. Abre configuración para guardarla en Windows y después actualiza la disponibilidad.';
+  if (selected?.configuration_error === 'credential_unavailable' || selected?.credential_source === 'error') return 'El backend no puede leer la configuración de credenciales. Revisa Credential Manager de Windows y actualiza la disponibilidad; no se ha confirmado un fallo de autenticación remota.';
+  if (selected?.configuration_error) return 'La configuración local de Deepgram no está disponible o es inválida. Revisa las credenciales del backend y actualiza la disponibilidad.';
+  if (selected?.configured === true && selected?.languages?.[selectedLanguage]?.available) return 'Deepgram está configurado localmente. Verificación remota: no realizada. El backend enviará audio a Deepgram y puede generar cargos.';
+  return 'Disponibilidad de Deepgram sin confirmar. Actualiza la disponibilidad y revisa el backend y la conexión. No se ha confirmado un fallo de autenticación remota; guardar una clave no la valida con Deepgram.';
+}
+let speechStatusRevision = 0;
+function updateSettingsAction() {
+  openSettings.hidden = !isCloud() || !window.copilotCapture?.openDeepgramSettings;
+  settingsHint.hidden = openSettings.hidden;
+  openSettings.disabled = busy;
+}
 async function updateSpeechStatus() {
+  const revision = ++speechStatusRevision;
+  const selectedProvider = provider.value, selectedLanguage = language.value;
+  updateSettingsAction();
+  refreshProvider.disabled = true;
+  notice('loading','Comprobando disponibilidad');
+  uiText(speechStatus, 'Actualizando disponibilidad…');
   try {
-    const response = await fetch(`${API}/live/status`, { cache: 'no-store' });
+    const response = await fetch(`${API}/live/status`, { cache: 'no-store', signal: AbortSignal.timeout(10000) });
     if (!response.ok) throw new Error('unavailable');
     const data = await response.json();
-    const selected = data.providers?.[provider.value] ?? (provider.value === 'vosk' ? data : null);
-    uiText(speechStatus, selected?.languages?.[language.value]?.available
-      ? `${engineLabel()} disponible. ${provider.value === 'faster-whisper' ? 'Solo resultados finales; detener cancela segmentos pendientes.' : 'Transcripción parcial y final.'}${isCloud() ? ' El backend enviará audio a Deepgram y puede generar cargos.' : ''}`
-      : `${engineLabel()} no disponible para este idioma. ${isCloud() ? 'Configura COPILOT_DEEPGRAM_API_KEY y websockets en el backend.' : 'Revisa el runtime o modelo local.'} No hay fallback automático.`);
+    if (revision !== speechStatusRevision) return;
+    const selected = data.providers?.[selectedProvider] ?? (selectedProvider === 'vosk' ? data : null);
+    updateAvailabilityNotice(selected, selectedProvider, selectedLanguage);
+    uiText(speechStatus, selectedProvider === 'deepgram' ? deepgramStatus(selected, selectedLanguage) : selected?.languages?.[selectedLanguage]?.available
+      ? `${engineLabel()} disponible. ${selectedProvider === 'faster-whisper' ? 'Solo resultados finales; detener cancela segmentos pendientes.' : 'Transcripción parcial y final.'}`
+      : `${engineLabel()} no disponible para este idioma. Revisa el runtime o modelo local. No hay fallback automático.`);
   } catch {
-    uiText(speechStatus, 'No se pudo consultar el motor. Verifica el backend antes de iniciar.');
+    if (revision === speechStatusRevision) {
+      notice('failure','Error al comprobar la disponibilidad');
+      uiText(speechStatus, 'No se pudo consultar el motor. Verifica el backend antes de iniciar.');
+    }
+  } finally {
+    if (revision === speechStatusRevision) refreshProvider.disabled = false;
   }
 }
+refreshProvider.addEventListener('click', () => updateSpeechStatus());
+openSettings.addEventListener('click', async () => {
+  if (busy || !isCloud()) return;
+  openSettings.disabled = true;
+  try {
+    if (!await window.copilotCapture?.openDeepgramSettings()) throw new Error('navigation unavailable');
+  } catch {
+    notice('failure','Error al comprobar la disponibilidad');
+    uiText(speechStatus, 'No se pudo abrir configuración. Detén y cierra los controles de audio y abre Settings en la ventana principal.');
+  } finally { openSettings.disabled = busy; }
+});
 provider.addEventListener('change', () => {
   // Explicit cloud consent cannot be inherited from an earlier local selection.
   consent.checked = false;
@@ -151,6 +212,7 @@ async function cleanup() {
   const closingContext = context;
   context = null;
   busy = false;
+  updateSettingsAction();
   stopping = false;
   stop.disabled = true;
   hideControls.disabled = true;
@@ -204,8 +266,11 @@ start.addEventListener('click', async () => {
   if (!consent.checked || busy) return;
   const revision = ++captureRevision;
   captureAttempt++;
+  ++speechStatusRevision;
+  refreshProvider.disabled = false;
   publishPhase('connecting');
   busy = true;
+  updateSettingsAction();
   start.disabled = true;
   language.disabled = true;
   provider.disabled = true;
@@ -255,6 +320,11 @@ start.addEventListener('click', async () => {
     if (revision !== captureRevision || !busy || stopping) return;
     const selected = availability.providers?.[selectedProvider] ?? (selectedProvider === 'vosk' ? availability : null);
     if (!selected?.languages?.[selectedLanguage]?.available) {
+      if (selectedProvider === 'deepgram') {
+        updateAvailabilityNotice(selected, selectedProvider, selectedLanguage);
+        uiText(speechStatus, deepgramStatus(selected, selectedLanguage));
+        throw new Error(deepgramStatus(selected, selectedLanguage));
+      }
       throw new Error(`${engineLabel()} (${selectedLanguage}) no está disponible. Revisa la configuración del backend; no hay fallback automático.`);
     }
     const session = await postJson('/sessions', { mode: 'live' });
@@ -347,6 +417,17 @@ start.addEventListener('click', async () => {
           contentText(questionHint, '');
         }
       } else if (packet.type === 'error') {
+        if (selectedProvider === 'deepgram' && packet.code === 'speech_unavailable') {
+          void fail(new Error('Disponibilidad de Deepgram sin confirmar. Actualiza la disponibilidad y revisa el backend y la conexión. No se ha confirmado un fallo de autenticación remota; guardar una clave no la valida con Deepgram.'))
+            .then(() => { if (revision + 1 === captureRevision) void updateSpeechStatus(); });
+          return;
+        }
+        if (selectedProvider === 'deepgram' && packet.code === 'speech_error') {
+          const message = 'No se pudo conectar con Deepgram. La causa remota no está confirmada: puede ser red, servicio o autenticación. Actualiza la disponibilidad y revisa la conexión; este error no demuestra que la API Key sea inválida.';
+          uiText(speechStatus, message);
+          void fail(new Error(message));
+          return;
+        }
         void fail(new Error(`${packet.code}: ${packet.message}`));
       }
     };

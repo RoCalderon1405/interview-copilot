@@ -66,6 +66,36 @@ function boot({packaged=false, platform='win32', trayFails=false, opaqueWindow=f
 }
 const e=win=>({sender:win.webContents,senderFrame:win.webContents.mainFrame});
 const invoke=(h,name,...args)=>h.handles.get('copilot:'+name)(e(h.window),...args);
+test('capture Settings action is fixed, trusted, inactive-only and restores the main Deepgram section',async()=>{
+  const h=await boot();invoke(h,'live-open');const capture=h.windows[1];
+  const openSettings=h.handles.get('copilot:capture-settings');
+  assert.equal(openSettings(e(h.window)),false);
+  assert.equal(openSettings({sender:capture.webContents,senderFrame:{url:capture.webContents.mainFrame.url}}),false);
+  const publish=h.listeners.get('copilot:live-packet');
+  publish(e(capture),{type:'capture_state',attempt:1,phase:'connecting'});
+  assert.equal(openSettings(e(capture)),false);
+  publish(e(capture),{type:'capture_state',attempt:1,phase:'active'});
+  assert.equal(openSettings(e(capture)),false);
+  assert.equal(capture.isDestroyed(),false);
+  publish(e(capture),{type:'capture_state',attempt:1,phase:'stopping'});
+  assert.equal(openSettings(e(capture)),false);
+  publish(e(capture),{type:'capture_state',attempt:1,phase:'stopped'});
+  invoke(h,'set-live-mode','compact');
+  h.window.minimize();
+  assert.equal(openSettings(e(capture)),true);
+  assert.equal(capture.isDestroyed(),true);
+  assert.equal(h.window.visible,true);
+  assert.equal(h.window.minimized,false);
+  assert.equal(invoke(h,'window-state').mode,'expanded');
+  assert.equal(h.window.webContents.sent.at(-1).channel,'copilot:deepgram-settings');
+  assert.equal(invoke(h,'window-state').protected,true);
+  assert.equal(h.window.webContents.check(),false);
+  assert.equal(openSettings(e(capture)),false);
+  // Closing the inactive capture releases the existing credential-editing guard.
+  await invoke(h,'deepgram-credentials','configure');
+  assert.equal(h.credentialCalls.at(-1).action,'configure');
+  assert.equal(invoke(h,'live-open'),true);
+});
 test('default native shell denies media in renderer and protects screen on Windows',async()=>{
  const h=await boot();assert.equal(invoke(h,'window-state').available,true);
  assert.equal(h.window.protected,true);

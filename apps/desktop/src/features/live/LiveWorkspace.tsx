@@ -1,5 +1,5 @@
 import {useEffect, useRef, useState} from 'react';
-import {AudioLines, CircleHelp, Headphones, Search, Shield, Square, Pin, PinOff, Minimize2, Maximize2, ChevronRight} from 'lucide-react';
+import {AudioLines, CircleHelp, Headphones, Search, Shield, Square, Pin, PinOff, Minimize2, Maximize2} from 'lucide-react';
 import {api} from '../../api';
 import {useI18n} from '../../i18n';
 import type {AnswerResponse, LiveEvent, LiveWindowState} from '../../types';
@@ -28,7 +28,6 @@ export function LiveWorkspace({showError, windowState, windowBusy = false, onMod
   const [question, setQuestion] = useState('');
   const [manualAnswer, setManualAnswer] = useState<AnswerResponse | null>(null);
   const [searching, setSearching] = useState(false);
-  const [transcriptOpen, setTranscriptOpen] = useState(false);
   const mounted = useRef(false);
   const nativeRevision = useRef(0);
   const bridge = window.copilotDesktop;
@@ -174,14 +173,8 @@ export function LiveWorkspace({showError, windowState, windowBusy = false, onMod
       <span className="visually-hidden" role="status" aria-atomic="true">{view.transcript[0]
         ? `${t('Transcripción confirmada')}: ${view.transcript[0].text}` : ''}</span>
       <section className="panel live-transcript" aria-labelledby="live-transcript-title">
-        <h2 id="live-transcript-title" className="live-transcript-heading">{compact
-          ? <button type="button" className="live-transcript-toggle" aria-expanded={transcriptOpen}
-              aria-controls="live-transcript-feed" onClick={()=>setTranscriptOpen(open=>!open)}>
-              <ChevronRight className="live-transcript-chevron" size={14} aria-hidden="true"/>
-              {t('Transcripción')} <AudioLines size={16} aria-hidden="true"/>
-            </button>
-          : <>{t('Transcripción')} <AudioLines size={16} aria-hidden="true"/></>}</h2>
-        <div id="live-transcript-feed" className="live-feed-scroll" hidden={compact && !transcriptOpen}
+        <h2 id="live-transcript-title" className="live-transcript-heading">{t('Transcripción')} <AudioLines size={16} aria-hidden="true"/></h2>
+        <div id="live-transcript-feed" className="live-feed-scroll"
           tabIndex={0} role="region" aria-label={t('Historial de transcripción')}>
           {view.partial && <div className="live-transcript-entry live-partial" role="group" aria-label={t('Transcripción provisional')}>
             <span className="live-interim-label"><span className="live-listening-dot" aria-hidden="true"/>{t('Escuchando…')}</span><p>{view.partial}</p>

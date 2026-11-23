@@ -41,6 +41,10 @@ export default function App() {
   const modeRequest = useRef(false);
   const windowRevision = useRef(0);
   const compact = page === 'live' && nativeWindow?.mode === 'compact';
+  useEffect(() => window.copilotDesktop?.onDeepgramSettings?.(() => {
+    setPage('settings');setError('');setNotice('');
+    requestAnimationFrame(() => document.getElementById('deepgram-settings-title')?.focus());
+  }), []);
   useEffect(() => {
     const revision = ++windowRevision.current;
     let disposed = false;

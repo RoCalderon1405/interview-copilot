@@ -1,4 +1,4 @@
-import type { AnswerResponse, DocumentRecord, Feedback, PracticeQuestion, Session, SessionReport } from './types';
+import type { AnswerResponse, DeepgramAvailability, DocumentRecord, Feedback, PracticeQuestion, Session, SessionReport } from './types';
 
 const API = 'http://127.0.0.1:8765';
 
@@ -15,7 +15,8 @@ async function request<T>(route: string, init?: RequestInit): Promise<T> {
 }
 const json = (body: unknown) => ({ headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), method: 'POST' });
 export const api = {
-  liveStatus: () => request<{providers?:{deepgram?:{configured?:boolean;credential_source?:string;configuration_error?:string|null}}}>('/live/status'),
+  // Bound availability checks; a stalled backend must leave the UI retryable.
+  liveStatus: () => request<{providers?:{deepgram?:DeepgramAvailability}}>('/live/status', {cache:'no-store', signal:AbortSignal.timeout(10000)}),
   health: () => request<{status: string}>('/health'),
   documents: () => request<{documents: DocumentRecord[]}>('/documents'),
   upload: (file: File) => { const data = new FormData(); data.append('file', file); return request<{id: string; name: string; entry_count: number}>('/documents', { method: 'POST', body: data }); },

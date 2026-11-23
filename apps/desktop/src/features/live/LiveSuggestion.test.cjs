@@ -7,13 +7,13 @@ const vm = require('node:vm');
 const ts = require('typescript');
 const React = require('react');
 const {renderToStaticMarkup} = require('react-dom/server');
-function load(file, imports = {}) {
+function load(file, imports = {}, globals = {}) {
   const compiled = ts.transpileModule(fs.readFileSync(path.join(__dirname,file),'utf8'), {
     compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS},
   }).outputText;
   const module = {exports:{}};
   vm.runInNewContext(compiled,{require: id => Object.hasOwn(imports,id) ? imports[id] : require(id),
-    exports:module.exports,module,window:{}});
+    exports:module.exports,module,window:{},...globals});
   return module.exports;
 }
 const translations = {window:{}};
@@ -30,6 +30,31 @@ const {LiveWorkspace} = load('LiveWorkspace.tsx', {
 const {DeepgramSettings}=load('../settings/DeepgramSettings.tsx', {'../../api':{api:{}},'../../i18n':i18n});
 const {default:App} = load('../../App.tsx', {'./api':{api:{}},'./features/live/LiveWorkspace':{LiveWorkspace},'./features/settings/DeepgramSettings':{DeepgramSettings},'./i18n':i18n});
 const render = item => renderToStaticMarkup(React.createElement(LiveSuggestion,{item}));
+test('native Settings event navigates to the existing Deepgram section in EN/ES and unsubscribes',()=>{
+  try { for(language of ['es','en']) {
+    let cursor=0, mounted=false, callback, focused;
+    const slots=[], effects=[],cleanups=[];
+    const hooks={...React,useState(initial){const index=cursor++;if(!(index in slots))slots[index]=initial;
+      return [slots[index],value=>{slots[index]=typeof value==='function'?value(slots[index]):value;}];},
+      useRef(initial){const index=cursor++;return slots[index]??(slots[index]={current:initial});},
+      useEffect(effect){if(!mounted)effects.push(effect);}};
+    const bridge={onDeepgramSettings:fn=>{callback=fn;return ()=>{callback=null;};},getWindowState:async()=>({mode:'expanded'})};
+    const {default:Shell}=load('../../App.tsx',{
+      react:hooks,'./api':{api:{health:async()=>{},documents:async()=>({documents:[]})}},
+      './features/live/LiveWorkspace':{LiveWorkspace},'./features/settings/DeepgramSettings':{DeepgramSettings},'./i18n':i18n,
+    },{window:{copilotDesktop:bridge},requestAnimationFrame:fn=>fn(),
+      document:{documentElement:{classList:{toggle(){},remove(){}}},getElementById:id=>({focus:()=>{focused=id;}})}});
+    const render=()=>{cursor=0;return renderToStaticMarkup(Shell());};
+    render();mounted=true;for(const effect of effects)cleanups.push(effect());
+    assert.equal(typeof callback,'function');callback();
+    const html=render();
+    assert.match(html,/id="deepgram-settings-title" tabindex="-1"/);
+    assert.match(html,language==='es'?/Configurar clave/:/Configure key/);
+    assert.equal(focused,'deepgram-settings-title');
+    for(const cleanup of cleanups)cleanup?.();
+    assert.equal(callback,null);
+  }}finally{language='es';}
+});
 test('Deepgram Settings never renders a credential input and explains Windows entry and independent consent in EN/ES',()=>{
   try{
     for(language of ['en','es']){
@@ -38,9 +63,266 @@ test('Deepgram Settings never renders a credential input and explains Windows en
       assert.match(html,language==='en'?/Configure key/:/Configurar clave/);
       assert.match(html,language==='en'?/Never enter your Windows password/:/Nunca introduzcas tu contraseña de Windows/);
       assert.match(html,language==='en'?/not configured|unconfirmed/:/sin confirmar/);
+      assert.match(html,language==='en'?/Remote verification: not performed/:/Verificación remota: no realizada/);
+      assert.match(html,/COPILOT_DEEPGRAM_API_KEY/);
       assert.doesNotMatch(html,/<input|<textarea|type="password"|localStorage/);
     }
   }finally{language='es';}
+});
+
+/** Minimal hook driver for async presentation behavior, not native/Windows acceptance. */
+function settingsHarness(manage, status, replayEffect=false) {
+  const slots=[];
+  let cursor=0, started=false, tree;
+  const effects=[];
+  const hooks={...React,
+    useState(initial){const index=cursor++;if(!(index in slots))slots[index]=initial;
+      return [slots[index],value=>{slots[index]=typeof value==='function'?value(slots[index]):value;}];},
+    useRef(initial){const index=cursor++;return slots[index]??(slots[index]={current:initial});},
+    useEffect(effect){if(!started)effects.push(effect);},
+  };
+  const {DeepgramSettings:Settings}=load('../settings/DeepgramSettings.tsx',{
+    react:hooks,'../../api':{api:{liveStatus:status}},'../../i18n':i18n,
+  },{window:{copilotDesktop:{manageDeepgramKey:manage,cancelDeepgramKey:async()=>true}}});
+  const render=()=>{cursor=0;tree=Settings();return renderToStaticMarkup(tree);};
+  const find=(node,label)=>{
+    if(!React.isValidElement(node))return;
+    if(node.type==='button' && node.props.children===label)return node;
+    for(const child of React.Children.toArray(node.props.children)){const found=find(child,label);if(found)return found;}
+  };
+  render();started=true;for(const effect of effects){if(replayEffect)effect()();effect();}
+  return {html:render,async click(label){render();const button=find(tree,label);assert.ok(button,label);
+    assert.notEqual(button.props.disabled,true);await button.props.onClick();await new Promise(setImmediate);return render();},
+    async settle(){await new Promise(setImmediate);return render();}};
+}
+
+test('credential operations keep localized success when subsequent Windows/backend refresh fails',async()=>{
+  try {
+    for(language of ['en','es'])for(const action of ['configure','replace','delete']) {
+      let stored=action!=='configure',completed=false;
+      const harness=settingsHarness(async operation=>{
+        if(operation==='status'){
+          if(completed)throw new Error('private native detail');
+          return {result:'status',stored};
+        }
+        assert.equal(operation,action);completed=true;stored=operation!=='delete';
+        return {result:operation==='delete'?'deleted':'configured',stored};
+      },async()=>{if(completed)throw new Error('private backend detail');
+        return {providers:{deepgram:{credential_source:'environment'}}};});
+      await harness.settle();
+      if(action==='delete')await harness.click(language==='en'?'Delete stored key':'Eliminar clave guardada');
+      const label=action==='configure'?['Configure key','Configurar clave']:action==='replace'?['Replace key','Reemplazar clave']:['Confirm deletion','Confirmar eliminación'];
+      const html=await harness.click(label[language==='en'?0:1]);
+      const expected=action==='configure'?['Key saved in Windows.','Clave guardada en Windows.']
+        :action==='replace'?['Key replaced in Windows.','Clave reemplazada en Windows.']
+        :['Stored key deleted.','Clave guardada eliminada.'];
+      assert.ok(html.includes(expected[language==='en'?0:1]));
+      assert.match(html,language==='en'?/Windows status could not be refreshed/:/No se pudo actualizar el estado de Windows/);
+      assert.match(html,language==='en'?/Backend status unconfirmed/:/Estado del backend sin confirmar/);
+      assert.doesNotMatch(html,/private native detail|private backend detail/);
+    }
+  } finally {language='es';}
+});
+
+test('credential outcome messages distinguish cancel, timeout, unknown result and rejected invocation in EN/ES',async()=>{
+  try {
+    for(language of ['en','es'])for(const outcome of ['cancelled','timed_out','unexpected','throws']) {
+      const harness=settingsHarness(async operation=>{
+        if(operation==='status')return {result:'status',stored:false};
+        if(outcome==='throws')throw new Error('private provider detail');
+        return {result:outcome,stored:null};
+      },async()=>({providers:{deepgram:{credential_source:'none'}}}));
+      await harness.settle();
+      const html=await harness.click(language==='en'?'Configure key':'Configurar clave');
+      const expected={cancelled:['Operation cancelled.','Operación cancelada.'],
+        timed_out:['It may have completed.','La operación puede haberse completado.'],
+        unexpected:['Outcome unconfirmed.','Resultado sin confirmar.'],
+        throws:['The outcome could not be confirmed.','No se pudo confirmar el resultado.']};
+      assert.ok(html.includes(expected[outcome][language==='en'?0:1]));
+      assert.doesNotMatch(html,/private provider detail/);
+    }
+  } finally {language='es';}
+});
+
+test('deletion keeps effective environment source explicit and Keep never calls delete',async()=>{
+  const actions=[];
+  let stored=true;
+  const harness=settingsHarness(async operation=>{actions.push(operation);if(operation==='delete')stored=false;
+    return {result:operation==='status'?'status':'deleted',stored};
+  },async()=>({providers:{deepgram:{credential_source:'environment'}}}));
+  await harness.settle();
+  await harness.click('Eliminar clave guardada');
+  assert.match(await harness.click('Conservar clave'),/Eliminación cancelada/);
+  assert.ok(!actions.includes('delete'));
+  await harness.click('Eliminar clave guardada');
+  const html=await harness.click('Confirmar eliminación');
+  assert.match(html,/Clave guardada en Windows: no configurada/);
+  assert.match(html,/Tiene prioridad sobre Windows/);
+  assert.match(html,/reinicia el backend/);
+});
+
+test('development effect replay starts one status request and invalid environment never implies Windows fallback',async()=>{
+  let calls=0,complete;
+  const pending=new Promise(resolve=>{complete=resolve;});
+  const harness=settingsHarness(async()=>{calls++;await pending;return {result:'status',stored:true};},
+    async()=>({providers:{deepgram:{configured:false,credential_source:'error',configuration_error:'invalid_environment'}}}),true);
+  let html=await harness.settle();
+  assert.equal(calls,1);
+  assert.match(html,/aria-busy="true"/);
+  assert.match(html,/<button[^>]*disabled=""[^>]*>Actualizar disponibilidad/);
+  complete();html=await harness.settle();
+  assert.match(html,/aria-busy="false"/);
+  assert.match(html,/Clave guardada en Windows: configurada/);
+  assert.match(html,/no se usa la clave de Windows/);
+  assert.match(html,/Verificación remota: no realizada/);
+});
+
+test('Settings availability shows loading and visible completion on success, no-change and failure in EN/ES',async()=>{
+  try {for(language of ['en','es']) {
+    const pending=[];
+    const h=settingsHarness(async()=>({result:'status',stored:true}),
+      ()=>new Promise((resolve,reject)=>pending.push({resolve,reject})));
+    const loading=language==='en'?/Refreshing availability…/:/Actualizando disponibilidad…/;
+    const complete=language==='en'?/Status refreshed\./:/Estado actualizado\./;
+    const ready=language==='en'?/configured locally.*Remote verification: not performed/:/configurado localmente.*Verificación remota: no realizada/;
+    const refresh=language==='en'?'Refresh availability':'Actualizar disponibilidad';
+    let html=await h.settle();
+    assert.match(html,loading);assert.match(html,/aria-busy="true"/);
+    assert.match(html,/class="availability-notice" data-kind="loading" role="status" aria-live="polite" aria-atomic="true"/);
+    const result={providers:{deepgram:{available:true,configured:true,runtime_installed:true,credential_source:'windows'}}};
+    pending[0].resolve(result);html=await h.settle();
+    assert.match(html,complete);assert.match(html,ready);assert.match(html,/aria-busy="false"/);
+    assert.match(html,/data-kind="available"/);
+    // A second, unchanged response must still replace loading with visible feedback.
+    html=await h.click(refresh);assert.match(html,loading);assert.match(html,/aria-busy="true"/);
+    assert.equal(pending.length,2);
+    pending[1].resolve(result);html=await h.settle();
+    assert.match(html,language==='en'?/Availability refreshed\. No changes\./:/Disponibilidad actualizada\. Sin cambios\./);
+    assert.match(html,ready);assert.doesNotMatch(html,loading);
+    html=await h.click(refresh);assert.match(html,loading);
+    pending[2].reject(new Error('private network detail'));html=await h.settle();
+    assert.match(html,/data-kind="failure"/);
+    assert.match(html,language==='en'?/Availability check failed/:/Error al comprobar la disponibilidad/);
+    assert.match(html,language==='en'?/Could not check Deepgram availability.*refresh again/:/No se pudo comprobar la disponibilidad de Deepgram.*vuelve a actualizar/);
+    assert.doesNotMatch(html,ready);assert.doesNotMatch(html,/private network detail/);
+    assert.match(html,/aria-busy="false"/);
+    pending.length=0;
+    await h.click(refresh);pending[0].resolve(result);html=await h.settle();
+    assert.match(html,complete);assert.match(html,ready);
+  }}finally{language='es';}
+});
+
+test('availability banners distinguish every local cause with translated visible headings',async()=>{
+  const cases=[
+    [{configured:false,credential_source:'none'},'missing-credentials','Falta la clave de Deepgram','Deepgram key missing'],
+    [{runtime_installed:false},'missing-runtime','Falta una dependencia de Deepgram','Deepgram dependency missing'],
+    [{configuration_error:'invalid_environment'},'invalid-configuration','Configuración local inválida','Invalid local configuration'],
+    [undefined,'unknown','Disponibilidad sin confirmar','Availability unconfirmed'],
+    [{available:true,configured:true},'available','Deepgram configurado localmente','Deepgram configured locally'],
+  ];
+  try {for(language of ['es','en'])for(const [provider,kind,es,en] of cases){
+    const h=settingsHarness(async()=>({result:'status',stored:true}),async()=>({providers:{deepgram:provider}}));
+    const html=await h.settle();
+    assert.ok(html.includes(`data-kind="${kind}"`));
+    assert.ok(html.includes(`<strong>${language==='es'?es:en}</strong>`));
+    assert.match(html,/<svg[^>]+aria-hidden="true"[^>]+focusable="false"/);
+    assert.match(html,language==='en'?/Refresh availability/:/Actualizar disponibilidad/);
+  }}finally{language='es';}
+});
+
+test('shared availability palette meets text and icon contrast and provides non-color cues',()=>{
+  const css=fs.readFileSync(path.join(__dirname,'../settings/availability-notice.css'),'utf8');
+  const luminance=hex=>{
+    const rgb=hex.match(/[a-f\d]{2}/gi).map(value=>parseInt(value,16)/255)
+      .map(value=>value<=0.04045?value/12.92:((value+0.055)/1.055)**2.4);
+    return rgb[0]*0.2126+rgb[1]*0.7152+rgb[2]*0.0722;
+  };
+  const palettes=[...css.matchAll(/--notice-bg:(#[a-f\d]{6});--notice-text:(#[a-f\d]{6});--notice-border:(#[a-f\d]{6})/g)];
+  assert.equal(palettes.length,7);
+  for(const [,bg,text,border] of palettes){
+    const ratio=(a,b)=>(Math.max(luminance(a),luminance(b))+0.05)/(Math.min(luminance(a),luminance(b))+0.05);
+    assert.ok(ratio(bg,text)>=4.5,`${bg}/${text}`);
+    assert.ok(ratio(bg,border)>=3,`${bg}/${border}`);
+  }
+  assert.match(css,/\.availability-notice>svg/);
+  assert.match(css,/forced-colors:active/);
+});
+
+test('Settings availability distinguishes local causes from unknown results in EN/ES',async()=>{
+  const cases=[
+    [{configured:false,credential_source:'none'},/No hay una API Key/,/No Deepgram API Key is configured/],
+    [{configured:true,runtime_installed:false},/Falta la dependencia websockets/,/dependency websockets is missing/],
+    [{configured:false,configuration_error:'invalid_environment'},/Corrígela o elimínala y reinicia el backend; no se usa la clave de Windows/,/Correct or remove it and restart the backend; the Windows key is not used/],
+    [{configured:false,configuration_error:'credential_unavailable'},/configuración local.*inválida/,/local configuration.*invalid/],
+    [{configured:true,available:false},/Disponibilidad de Deepgram sin confirmar/,/Deepgram availability is unconfirmed/],
+    [undefined,/Disponibilidad de Deepgram sin confirmar/,/Deepgram availability is unconfirmed/],
+  ];
+  try {for(language of ['es','en'])for(const [provider,es,en] of cases) {
+    const h=settingsHarness(async()=>({result:'status',stored:true}),async()=>({providers:{deepgram:provider}}));
+    const html=await h.settle();
+    assert.match(html,language==='es'?es:en);
+    assert.match(html,provider ? (language==='es'?/Estado actualizado\./:/Status refreshed\./)
+      : (language==='es'?/Estado del backend sin confirmar/:/Backend status unconfirmed/));
+    assert.match(html,language==='es'?/Verificación remota: no realizada/:/Remote verification: not performed/);
+  }}finally{language='es';}
+});
+
+test('availability source changes are not reported as unchanged readiness',async()=>{
+  let source='windows';
+  const h=settingsHarness(async()=>({result:'status',stored:true}),async()=>({providers:{deepgram:{
+    available:true,configured:true,runtime_installed:true,credential_source:source,
+  }}}));
+  await h.settle();source='environment';
+  let html=await h.click('Actualizar disponibilidad');
+  assert.match(html,/Tiene prioridad sobre Windows/);
+  assert.match(html,/Estado actualizado\./);
+  assert.doesNotMatch(html,/Sin cambios/);
+  html=await h.click('Actualizar disponibilidad');
+  assert.match(html,/Disponibilidad actualizada\. Sin cambios\./);
+});
+
+test('availability HTTP checks use a deadline and cache bypass and reject timeouts without leaking details',async()=>{
+  const controller=new AbortController();
+  const {api}=load('../../api.ts',{}, {
+    AbortSignal:{timeout(ms){assert.equal(ms,10000);return controller.signal;}},
+    fetch:async(url,options)=>{
+      assert.match(url,/\/live\/status$/);assert.equal(options.cache,'no-store');
+      assert.equal(options.signal,controller.signal);
+      return new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(new Error('private timeout detail'))));
+    },
+  });
+  const pending=api.liveStatus();controller.abort();
+  await assert.rejects(pending,/No se pudo conectar al backend/);
+});
+
+test('save, replacement and deletion automatically recheck availability without clearing operation feedback',async()=>{
+  try {for(language of ['en','es'])for(const operation of ['configure','replace','delete']) {
+    let stored=operation!=='configure',backendCalls=0,complete;
+    const h=settingsHarness(async action=>{
+      if(action==='status')return {result:'status',stored};
+      assert.equal(action,operation);stored=action!=='delete';
+      return {result:stored?'configured':'deleted',stored};
+    },()=>{
+      if(++backendCalls===1)return Promise.resolve({providers:{deepgram:{configured:stored,available:stored,credential_source:stored?'windows':'none'}}});
+      return new Promise(resolve=>{complete=resolve;});
+    });
+    await h.settle();
+    if(operation==='delete')await h.click(language==='en'?'Delete stored key':'Eliminar clave guardada');
+    const labels={configure:['Configure key','Configurar clave'],replace:['Replace key','Reemplazar clave'],delete:['Confirm deletion','Confirmar eliminación']};
+    let html=await h.click(labels[operation][language==='en'?0:1]);
+    assert.equal(backendCalls,2);
+    assert.match(html,language==='en'?/Refreshing availability…/:/Actualizando disponibilidad…/);
+    const expected=operation==='delete'?(language==='en'?/Stored key deleted\./:/Clave guardada eliminada\./)
+      :operation==='replace'?(language==='en'?/Key replaced in Windows\./:/Clave reemplazada en Windows\./)
+      :(language==='en'?/Key saved in Windows\./:/Clave guardada en Windows\./);
+    assert.match(html,expected);
+    complete({providers:{deepgram:{configured:stored,available:stored,runtime_installed:true,credential_source:stored?'windows':'none'}}});
+    html=await h.settle();
+    assert.match(html,expected);
+    assert.match(html,stored?(language==='en'?/configured locally/:/configurado localmente/)
+      :(language==='en'?/No Deepgram API Key is configured/:/No hay una API Key/));
+    assert.match(html,/aria-busy="false"/);
+  }}finally{language='es';}
 });
 function renderState(view) {
   const {LiveWorkspace:Workspace}=load('LiveWorkspace.tsx',{
@@ -182,7 +464,7 @@ test('workspace uses one answer-first queue and no separate history, without hid
   assert.match(html,/no garantiza invisibilidad/);
 });
 
-test('expanded transcript is always visible without a toggle; compact retains labeled access and Q&A omits ordering copy in EN/ES',()=>{
+test('transcript stays visible without a toggle in both modes; compact keeps Q&A first in EN/ES',()=>{
   try {
     for(const locale of ['es','en']) {
       language=locale;
@@ -193,14 +475,9 @@ test('expanded transcript is always visible without a toggle; compact retains la
         assert.match(transcript,new RegExp(locale==='es'?'Transcripción':'Transcript'));
         assert.doesNotMatch(html,/Newest first|Lo más reciente arriba/);
         assert.doesNotMatch(transcript,/<details|<summary/);
-        if(mode==='expanded') {
-          assert.doesNotMatch(transcript,/<button|aria-expanded/);
-          assert.doesNotMatch(feed,/\bhidden\b/);
-        } else {
-          assert.match(transcript,/<button[^>]*aria-expanded="false"[^>]*aria-controls="live-transcript-feed"/);
-          assert.match(feed,/\bhidden\b/);
-          assert.ok(html.indexOf('live-answer-column')<html.indexOf('panel live-transcript'));
-        }
+        assert.doesNotMatch(transcript,/<button|aria-expanded/);
+        assert.doesNotMatch(feed,/\bhidden\b/);
+        assert.ok(html.indexOf('live-answer-column')<html.indexOf('panel live-transcript'));
         assert.match(feed,/tabindex="0" role="region"/);
       }
     }

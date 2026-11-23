@@ -1,0 +1,21 @@
+/* Shared by Settings and the isolated capture page; icons supplement text. */
+.availability-notice{--notice-bg:#19283d;--notice-text:#c4d9ff;--notice-border:#637fa5;display:flex;align-items:flex-start;gap:12px;padding:16px;margin-block:12px;border:1px solid var(--notice-border);border-radius:8px;background:var(--notice-bg);color:var(--notice-text);overflow-wrap:anywhere}
+.availability-notice>svg{width:24px;height:24px;flex:0 0 24px}
+.availability-notice>div{min-width:0}
+.availability-notice strong{display:block;font-size:14px;line-height:1.5}
+.availability-notice p,.capture-page .availability-notice p{color:inherit;font-size:13px;line-height:1.6;margin:6px 0 0;max-width:70ch}
+.availability-notice[data-kind=missing-credentials]{--notice-bg:#39270e;--notice-text:#ffda96;--notice-border:#d59537}
+.availability-notice[data-kind=missing-runtime]{--notice-bg:#34271e;--notice-text:#ffd1ad;--notice-border:#ba855c}
+.availability-notice[data-kind=invalid-configuration]{--notice-bg:#3b202b;--notice-text:#ffc4d3;--notice-border:#c67d91}
+.availability-notice[data-kind=unknown]{--notice-bg:#252638;--notice-text:#d5d2f3;--notice-border:#8e8aaf}
+.availability-notice[data-kind=failure]{--notice-bg:#3d2024;--notice-text:#ffc5c0;--notice-border:#da837b}
+.availability-notice[data-kind=available]{--notice-bg:#172f28;--notice-text:#a4e7c4;--notice-border:#63ab88}
+.availability-notice>svg>g{display:none}
+.availability-notice[data-kind=missing-credentials] [data-notice-icon=missing-credentials],
+.availability-notice[data-kind=missing-runtime] [data-notice-icon=missing-runtime],
+.availability-notice[data-kind=invalid-configuration] [data-notice-icon=invalid-configuration],
+.availability-notice[data-kind=unknown] [data-notice-icon=unknown],
+.availability-notice[data-kind=failure] [data-notice-icon=failure],
+.availability-notice[data-kind=loading] [data-notice-icon=loading],
+.availability-notice[data-kind=available] [data-notice-icon=available]{display:inline}
+@media(forced-colors:active){.availability-notice{border-color:CanvasText}}

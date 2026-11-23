@@ -387,6 +387,16 @@ app.whenReady().then(() => {
     captureWindow.hide();
     return true;
   });
+  ipcMain.handle('copilot:capture-settings', event => {
+    if (!trustedCapture(event) || !['idle','stopped','error'].includes(capturePhase) ||
+        !mainWindow || mainWindow.isDestroyed()) return false;
+    // Credential editing already requires all capture windows to be closed.
+    captureWindow.close();
+    setLiveMode(mainWindow, 'expanded');
+    restoreWindow(mainWindow);
+    mainWindow.webContents.send('copilot:deepgram-settings');
+    return true;
+  });
   ipcMain.on('copilot:live-packet', (event, data) => {
     if (!trustedCapture(event)) return;
     if (data?.type === 'capture_state') { acceptCapturePhase(data); return; }

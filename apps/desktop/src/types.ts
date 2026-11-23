@@ -10,6 +10,10 @@ export type GenerationFailureCode = 'disabled' | 'not_configured' | 'invalid_inp
 export type LiveWindowState = {available:boolean; protected:boolean; alwaysOnTop:boolean;
   mode:'compact' | 'expanded'; backgroundOpacity:number; transparencyAvailable:boolean; customFrame:boolean};
 export type DeepgramKeyResult = {result:'status'|'configured'|'deleted'|'cancelled'|'conflict'|'busy'|'error'|'unsupported'|'timed_out'; stored:boolean|null};
+export type DeepgramAvailability = {
+  available?:boolean; runtime_installed?:boolean; configured?:boolean;
+  credential_source?:string; configuration_error?:string|null;
+};
 
 export type LiveEvent =
   | {type: 'status'; text: string}
@@ -41,6 +45,7 @@ declare global {
       closeLiveCapture(): Promise<boolean>;
       getLiveState(): Promise<{open: boolean; events: LiveEvent[]}>;
       setUiLanguage(language: 'en' | 'es'): Promise<boolean>;
+      onDeepgramSettings(callback: () => void): () => void;
       onLiveEvent(callback: (event: LiveEvent) => void): () => void;
     };
   }

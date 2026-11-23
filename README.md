@@ -32,7 +32,7 @@ Transcript alongside a continuous Q&A queue, with document sources and unverifie
 
 ### Compact mode
 
-The same Q&A queue in a narrower, answer-first layout; transcript access remains available below the queue.
+The same Q&A queue in a narrower, answer-first layout; the transcript stays open below it. Both feeds scroll independently. At the minimum window size, vertical page scrolling is still needed. The illustration below predates the permanently visible compact transcript.
 
 <img src="docs/images/live-compact.png" alt="Compact Electron Live workspace with the same synthetic Q&amp;A cards" width="360">
 
@@ -94,7 +94,7 @@ The API listens at `http://127.0.0.1:8765`; Vite uses `http://127.0.0.1:5173`. I
 
 - **Capture scope:** system-audio capture includes **all Windows output**, not one selected application. Obtain participants' consent and follow organizational policies. The main renderer has no capture permissions.
 - **Local data:** Live audio and transcripts are not persisted; in-memory histories are bounded, not a session archive. Imported documents and basic Practice answers are stored locally.
-- **Cloud privacy and keys:** Deepgram sends audio off-device, requires separate informed consent, may incur charges and has its own processing/retention policies. Windows development Settings supports native key entry and Credential Manager storage; the backend environment override remains supported and takes priority. See the [setup guide](docs/setup.md#optional-deepgram-nova-3). `.env` is not loaded automatically. Never put keys in React, tracked files or screenshots.
+- **Cloud privacy and keys:** Deepgram sends audio off-device, requires separate informed consent, may incur charges and has its own processing/retention policies. Windows development Settings supports native key entry and Credential Manager storage; it distinguishes stored keys, the effective backend source and remote verification (not performed). Saving is not authentication. Deleting the Windows key leaves the higher-priority backend environment override unchanged. See the [setup guide](docs/setup.md#optional-deepgram-nova-3). `.env` is not loaded automatically. Never put keys in React, tracked files or screenshots.
 - **Screen sharing:** main-window exclusion is **best effort**, never proof of invisibility. The auxiliary audio window is not protected; Teams, Zoom and Google Meet exclusion remains unverified.
 - **Accuracy and acceptance:** STT and question detection can miss or combine speech. Full Spanish, latency, stop/restart, overlay and capture-continuity acceptance is pending. AI can invent claims; **AI-001C quality is not accepted**. Review all suggestions. Scanned-PDF OCR is not implemented; see [document-format limits](docs/setup.md#documents-and-retrieval).
 

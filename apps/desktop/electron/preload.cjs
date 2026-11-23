@@ -17,6 +17,11 @@ contextBridge.exposeInMainWorld('copilotDesktop', {
   closeLiveCapture: () => ipcRenderer.invoke('copilot:live-close'),
   getLiveState: () => ipcRenderer.invoke('copilot:live-state'),
   setUiLanguage: language => ipcRenderer.invoke('copilot:ui-language', language),
+  onDeepgramSettings: callback => {
+    const listener = () => callback();
+    ipcRenderer.on('copilot:deepgram-settings', listener);
+    return () => ipcRenderer.removeListener('copilot:deepgram-settings', listener);
+  },
   onLiveEvent: callback => {
     const listener = (_event, packet) => callback(packet);
     ipcRenderer.on('copilot:live-event', listener);

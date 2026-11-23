@@ -4,8 +4,10 @@
 
 /* Live presentation stays scoped so Knowledge and Practice keep their layout. */
 .credential-settings{margin-top:24px}
-.credential-settings p{max-width:70ch;line-height:1.6}
+.credential-settings p{max-width:70ch;line-height:1.6;overflow-wrap:anywhere}
+.credential-settings [role=status]{margin-block:8px}
 .credential-actions{display:flex;flex-wrap:wrap;gap:8px;margin-block:16px}
+.credential-actions button:focus-visible{outline:2px solid #aab7ff;outline-offset:3px}
 :root{--live-bg:#0c111b;--live-surface:#121a27;--live-raised:#182232;--live-border:#2b384b;--live-text:#e8edf5;--live-muted:#a7b5c9;--live-accent:#aab7ff;--live-radius:12px}
 .app-layout-live{background:var(--live-bg);color:var(--live-text)}
 .app-layout-live .sidebar{width:208px;min-width:208px;background:var(--live-bg);padding-top:24px}
@@ -52,9 +54,6 @@
 .live-results .live-transcript{height:100%;display:flex;flex-direction:column}
 .live-results .live-transcript-heading{margin:0;padding:12px 16px;font-size:14px;line-height:20px;border-bottom:1px solid var(--live-border);flex-shrink:0}
 .live-transcript-heading>svg{vertical-align:middle;margin-left:8px}
-.live-transcript-toggle{display:flex;align-items:center;gap:8px;width:100%;min-height:44px;padding:12px 16px;border:0;background:transparent;color:inherit;font:inherit;text-align:left}
-.live-transcript-toggle[aria-expanded=true] .live-transcript-chevron{transform:rotate(90deg)}
-.live-transcript>.live-feed-scroll[hidden]{display:none}
 .live-results .panel-title{padding:16px 20px;margin:0;border-bottom:1px solid var(--live-border);flex-shrink:0;color:var(--live-muted)}
 .live-results h2{color:var(--live-text);font-size:14px;margin:0 0 4px}
 /* Native anchoring keeps older entries in view when new items are prepended. */
@@ -150,10 +149,13 @@ html.live-overlay,html.live-overlay body,html.live-overlay #root{background:tran
 .live-workspace-compact .live-window-controls,.live-workspace-compact .live-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .live-workspace-compact .btn{white-space:normal;padding:8px 10px}
 .live-workspace-compact .live-pin-copy{align-items:flex-start}
-.live-workspace-compact .live-transcript-heading{padding:0}
+.live-workspace-compact .live-results{grid-template-columns:minmax(0,1fr);grid-template-areas:'answers' 'transcript';grid-template-rows:minmax(0,3fr) minmax(140px,2fr);height:clamp(300px,calc(100dvh - 340px),600px);gap:8px;flex-shrink:0}
+.live-workspace-compact .live-results .live-transcript{height:100%}
+.live-workspace-compact .live-transcript-heading{padding:8px 12px}
+.live-workspace-compact .live-transcript>.live-feed-scroll{max-height:none;padding:12px}
 .live-workspace-compact .live-header h1{font-size:18px;letter-spacing:-.3px}
 .live-workspace-compact .live-current .panel-title{padding:12px}
-.live-workspace-compact .live-current-feed{padding:12px;max-height:55dvh}
+.live-workspace-compact .live-current-feed{padding:12px;max-height:none}
 .live-workspace-compact .live-current-question{font-size:18px}
 .live-workspace-compact .live-result{padding:14px}
 .live-workspace-compact .live-result p{font-size:16px}
