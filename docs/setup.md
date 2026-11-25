@@ -82,14 +82,45 @@ Windows storage is not a vault against malware running as the same user or an ad
 
 Imports support XLSX, DOCX, PDF, TXT and Markdown up to 20 MB:
 
-- XLSX recognizes EN/ES labeled question/answer columns; other rows become text fragments.
+- XLSX imports every complete Q&A pair under the detected header, including `Pregunta (ES)` / `Respuesta (ES)` and `Question (EN)` / `Answer (EN)`. Columns can be non-adjacent; explicit language labels must match. Incomplete row pairs are skipped, never completed with another language's answer. Sheets without a recognized Q&A header produce text fragments.
 - DOCX extracts Q&A tables and paragraph fragments.
 - TXT/Markdown recognizes `Q:`/`A:`, `Question:`/`Answer:` or `Pregunta:`/`Respuesta:` blocks. Other content becomes fragments; surrounding prose is not separately indexed when Q&A blocks exist.
 - PDF produces fragments. Encrypted PDFs are rejected, and scanned PDFs need OCR that is not implemented.
 
 Automatic Live uses normalized exact Q&A → optional semantic Q&A → explicit no-evidence. It does not use document fragments as automatic answers. Only then may explicitly enabled Ollama provide a separate unverified suggestion. Manual `POST /answers` uses exact Q&A followed by FTS5/lexical candidates, including excerpts; Practice retains its existing lexical assessment.
 
-Extraction normalizes whitespace and limits fields. Sources identify stored content, not verified truth or guaranteed original formatting. Imports update entries/FTS but not embeddings. Deletion removes linked entries, vectors and Practice answers. There is no in-place document update API. Do not reindex solely to validate unrelated changes.
+Extraction normalizes whitespace and limits fields. Sources identify stored content, not verified truth or guaranteed original formatting. Imports update entries/FTS immediately; optional automatic semantic indexing runs separately, as described below. Deletion removes linked entries, vectors, indexing status and Practice answers. There is no in-place document update API. Do not reindex solely to validate unrelated changes.
+
+### Bilingual evidence and safe legacy XLSX reimport
+
+Documentary Q&A selection never uses the interface locale or STT setting. Normalized exact questions retain priority: when the exact stored question has one unambiguous declared source language, that provenance establishes its language even if the request-word heuristic abstains or misclassifies it. If the same normalized question has both ES/EN labels, the query must identify a matching language; an ambiguous technical-only collision abstains. Similar/semantic Q&A still require conservative EN/ES query eligibility and the existing relevance/score safeguards. Stored answers are not translated or generated. Mixed-language or unusual paraphrases can abstain; this is not a general language classifier. Fragment excerpts and basic Practice keep their existing behavior.
+
+New labelled XLSX pairs retain document, sheet, row, column pair and declared language provenance. On startup, SQLite adds nullable `entries.language` only; existing entries, FTS and embeddings are not rebuilt. Old entries stay unlabelled. Their question wording can reject a clear language mismatch, but cannot certify their answer language; unknown legacy wording remains compatible. An old incorrectly paired answer is not repaired merely by restarting or indexing embeddings.
+
+The approved interview bank is **one bilingual workbook**, not separate language files. Its eight sheets have these headers on row 4: `ID`, `Prioridad`, `Tema`, `Pregunta (ES)`, `Respuesta (ES)`, `Question (EN)`, `Answer (EN)`, `Repregunta / práctica`, `Origen`, `Repaso`. Expected: 257 complete pairs per language, 514 Q&A with unique IDs. The original also contains 16 retained title/context fragments, so its total extracted/stored entry count is **530**, not 514. Semantic counts include only Q&A.
+
+#### Explicit offline reprocessing of this bank
+
+Use `apps/api/reprocess_bilingual_xlsx.py`; there is no automatic reparse or HTTP reprocess endpoint. This focused command repairs the existing document from its hash-verified locally stored original, retaining its document ID, source bytes and import date. It does not create another document or bypass duplicate-content protection. Do not rename/re-upload, split languages, delete the old document or rebuild the KB to repair the 257-Q&A import.
+
+1. Obtain the existing XLSX document ID from `GET /documents`. Use the **same actual database path** as the working backend. From the repository root in CMD, set the two values (replace the ID; respect any `COPILOT_DATA_DIR` override):
+
+   ```bat
+   set "BANK_DB=%LOCALAPPDATA%\InterviewCopilot\copilot.sqlite3"
+   set "BANK_DOCUMENT_ID=REPLACE_WITH_EXISTING_XLSX_ID"
+   .venv\Scripts\python.exe apps\api\reprocess_bilingual_xlsx.py --database "%BANK_DB%" --document-id "%BANK_DOCUMENT_ID%"
+   ```
+
+2. Review the dry-run JSON. For the legacy bank it must report **257 ES + 257 EN**, **273 IDs retained**, **257 metadata updates**, **257 additions**, **530 entries after**, and **257 existing vectors preserved for the existing model**. Preview is read-only and creates no backup or model work. It rejects changed source hashes, unexpected headers/counts, duplicate IDs, incomplete pairs, changed existing wording/source locations, ambiguous mappings or invalid existing vectors. Do not force a refusal.
+3. Stop capture and the backend normally; do not kill an active session or indexing process. Repeat preview after stopping and use its latest `preview_token`. Apply only after reviewing the counts:
+
+   ```bat
+   .venv\Scripts\python.exe apps\api\reprocess_bilingual_xlsx.py --database "%BANK_DB%" --document-id "%BANK_DOCUMENT_ID%" --apply --preview-token REPLACE_WITH_LATEST_TOKEN --backend-stopped
+   ```
+
+   The CLI also refuses apply while port 8765 is listening. The stopped confirmation applies to every backend process, including any custom-port launch. A changed source/entry/vector/Practice snapshot invalidates the token. Before editing, it backs up the complete SQLite database, this workbook and the aggregate preview under `<data-root>\reprocess-backups\<unique-run>`. Keep that private local backup protected: it contains documents/Practice data. No backup is uploaded or committed. Restore only deliberately, with the backend stopped; restoring SQLite also restores all data to that snapshot, not just this document.
+4. Apply uses one SQLite transaction. Existing entry IDs, question/answer/body text, FTS rows, valid unit-vector bytes and Practice references remain. Only source-location/language metadata is completed and missing entries/FTS rows are added. Unmatched or changed old entries abort rather than being removed. The original file and unrelated documents remain untouched. Only the affected document's obsolete semantic completion/error marker is reset; readiness then derives from its unchanged vectors. Backup/transaction failures leave no partial entry changes. Repeating a current preview/apply is a no-op, not another import.
+5. Restart the backend normally and refresh Knowledge Base. Expect **257/514 indexed Q&A**, with 257 pending EN questions, until explicitly indexed. Use **Index / Indexar on this document only**, or the existing scoped API with `document_id`, `background:true`, `allow_download:false`. RAG-002 reuses the same cached model and skips the existing ES vectors. The repair itself never loads a model, schedules indexing or authorizes downloads; no whole-KB indexing request is needed. After successful affected-document indexing, expect **514/514**. Check exact ES/EN source-backed answers with either interface locale; validate semantic paraphrases separately.
 
 ## Optional local semantic setup
 
@@ -102,6 +133,23 @@ curl.exe -X POST http://127.0.0.1:8765/semantic/index -H "Content-Type: applicat
 ```
 
 Missing models require separate download approval before setting `allow_download` to `true`. Live never downloads or indexes automatically. Semantic candidates require review; unavailable, weak or ambiguous matches can leave no evidence.
+
+### Automatic incremental semantic indexing (RAG-002)
+
+Automatic indexing is **disabled by default**. To enable it for new imports, set `COPILOT_AUTO_SEMANTIC_INDEX=1` (or `true`) in the backend environment before starting/restarting the API. For Windows CMD:
+
+```bat
+set "COPILOT_AUTO_SEMANTIC_INDEX=1"
+dev-api.bat
+```
+
+Use `0` or unset the variable, then restart the backend, to disable automatic scheduling. Knowledge Base shows enabled, disabled or unconfirmed status; it is not a UI toggle. Enabling the feature does not index older documents, download a model or install FastEmbed. Only missing Q&A embeddings for the existing model are processed. Fragment-only imports need no embeddings.
+
+Knowledge Base shows pending/indexing/completed/failed with Q&A counts and **Index / Retry indexing** actions, available even when automatic indexing is disabled. Both actions use the cached local model only. If it is unavailable, obtain separate installation/download approval and prepare it explicitly, then retry. Imported documents, exact/lexical search and successful embedding batches remain available after semantic failure. Import success is not semantic completion.
+
+The existing `/semantic/index` endpoint accepts optional `document_id` and `background:true`; old synchronous requests continue to work. Background requests always use `allow_download:false` and reject `allow_download:true`. Separate approved synchronous preparation is the only existing download-capable path; retry never grants that consent. Status requests have a 10-second UI deadline; if a submission times out, refresh its state before retrying because the work may already be queued.
+
+One worker processes small batches and waits while a Live connection is active. An already running native batch must finish; no instant cancellation or latency bound is promised. Backend shutdown drains it without discarding saved vectors. Pending/running work interrupted by shutdown/restart becomes failed/interrupted and requires explicit retry. This coordination supports the existing single-backend-process development launch, not multiple API workers sharing a database. Real cached-model responsiveness, Windows lifecycle and accessibility acceptance remain pending in [Live Mode](live-mode.md#rag-002--automatic-incremental-semantic-indexing).
 
 ## Optional automatic local generation (AI-001A / AI-001B)
 

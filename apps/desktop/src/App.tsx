@@ -2,13 +2,13 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import {
   AudioLines, BookOpen, Check, ChevronRight, CircleHelp, File, FileSpreadsheet, FileText,
   GraduationCap, Headphones, LayoutDashboard, LockKeyhole, Plus, Search,
-  Send, Settings, Shield, Sparkles, Trash2, UploadCloud, WifiOff, X, Minus, TriangleAlert, CircleX,
+  Send, Settings, Shield, Sparkles, Trash2, UploadCloud, WifiOff, X, Minus, TriangleAlert, CircleX, Clock, CircleCheck, Info,
 } from 'lucide-react';
 import { api } from './api';
 import {LiveWorkspace} from './features/live/LiveWorkspace';
 import {DeepgramSettings} from './features/settings/DeepgramSettings';
 import {useI18n} from './i18n';
-import type { AnswerResponse, DocumentRecord, Feedback, LiveWindowState, PracticeQuestion, Session, SessionReport } from './types';
+import type { AnswerResponse, DocumentRecord, Feedback, LiveWindowState, PracticeQuestion, SemanticDocument, SemanticStatus, Session, SessionReport } from './types';
 
 type Page = 'overview' | 'knowledge' | 'practice' | 'live' | 'settings';
 const NAV: { id: Page; label: string; icon: typeof BookOpen }[] = [
@@ -25,6 +25,12 @@ function SourceTag({source}: {source: AnswerResponse['source']}) {
 function EmptyState({icon: Icon, title, body}: {icon: typeof BookOpen; title: string; body: string}) {
   return <div className="empty-state"><div className="empty-icon"><Icon size={25}/></div><h3>{title}</h3><p>{body}</p></div>;
 }
+/** Minimal page delta that keeps a focused control clear of sticky topbar/command header. */
+export function focusScrollDelta(rect: {top:number;bottom:number}, safeTop:number, viewportHeight:number): number {
+  if (rect.top < safeTop) return rect.top - safeTop;
+  if (rect.bottom > viewportHeight - 8) return Math.min(rect.bottom - (viewportHeight - 8), Math.max(0, rect.top - safeTop));
+  return 0;
+}
 
 export default function App() {
   const {language, setLanguage, saved, t} = useI18n();
@@ -40,7 +46,35 @@ export default function App() {
   const onTopRequest = useRef(false);
   const modeRequest = useRef(false);
   const windowRevision = useRef(0);
+  const mainArea = useRef<HTMLElement|null>(null);
   const compact = page === 'live' && nativeWindow?.mode === 'compact';
+  useEffect(()=>{
+    const area=mainArea.current;
+    const topbar=area?.querySelector<HTMLElement>('.topbar');
+    if(!area || !topbar)return;
+    // Wrapped/zoomed controls can exceed 56px; keep the compact command header below them.
+    const measure=()=>area.style.setProperty('--topbar-height',`${Math.ceil(topbar.getBoundingClientRect().height)}px`);
+    measure();
+    const observer=new ResizeObserver(measure);
+    observer.observe(topbar);
+    // Browsers do not account for sticky overlays when focus is already partly visible.
+    let focusFrame=0;
+    const keepFocusVisible=(event:FocusEvent)=>{
+      const target=event.target;
+      if(!(target instanceof HTMLElement)||!area.contains(target)||target.closest('.topbar,.live-header'))return;
+      cancelAnimationFrame(focusFrame);
+      // Run after the browser's own minimal focus scroll, then correct sticky overlap.
+      focusFrame=requestAnimationFrame(()=>{
+        const header=area.querySelector<HTMLElement>('.live-workspace-compact .live-header');
+        const stickyHeader=header&&getComputedStyle(header).position==='sticky'?header:null;
+        const safeTop=Math.max(topbar.getBoundingClientRect().bottom,stickyHeader?.getBoundingClientRect().bottom??0)+8;
+        const delta=focusScrollDelta(target.getBoundingClientRect(),safeTop,window.innerHeight);
+        if(delta)window.scrollTo(0,Math.max(0,window.scrollY+delta));
+      });
+    };
+    area.addEventListener('focusin',keepFocusVisible);
+    return ()=>{observer.disconnect();cancelAnimationFrame(focusFrame);area.removeEventListener('focusin',keepFocusVisible);area.style.removeProperty('--topbar-height');};
+  },[]);
   useEffect(() => window.copilotDesktop?.onDeepgramSettings?.(() => {
     setPage('settings');setError('');setNotice('');
     requestAnimationFrame(() => document.getElementById('deepgram-settings-title')?.focus());
@@ -112,7 +146,9 @@ export default function App() {
   const showError = (err: unknown) => setError(err instanceof Error ? err.message : 'Error desconocido');
   const onUpload = async (file: File) => {
     setError(''); setNotice('');
-    try { const result = await api.upload(file); setNotice(`${result.name}: ${result.entry_count} entradas indexadas.`); await refresh(); }
+    try { const result = await api.upload(file); setNotice(`${result.name}: ${result.entry_count} entradas importadas.`);
+      if(result.semantic_indexing_error)setError('Documento importado. No se pudo programar la indexación semántica; actualiza su estado y usa Indexar.');
+      await refresh(); }
     catch(err) { showError(err); }
   };
   return <div className={`app-layout ${page === 'live' ? 'app-layout-live' : ''} ${compact ? 'app-layout-compact' : ''} ${nativeWindow?.customFrame ? 'app-custom-frame' : ''}`}
@@ -123,7 +159,7 @@ export default function App() {
        <nav className="sidebar-nav" aria-label={t('Workspace')}>{NAV.map(item => <button key={item.id} type="button" aria-label={t(item.label)} aria-current={page === item.id ? 'page' : undefined} title={t(item.label)} className={`nav-link ${page === item.id ? 'active' : ''}`} onClick={() => navigate(item.id)}><item.icon size={18} aria-hidden="true"/><span>{t(item.label)}</span>{page === item.id && <ChevronRight size={16} className="nav-arrow" aria-hidden="true"/>}</button>)}</nav>
        <div className="sidebar-bottom"><div className="privacy-tile"><Shield size={18}/><div><strong>{t('Private by design')}</strong><span>{t('Documents stored locally')}</span></div></div><div className="profile"><div className="avatar">IC</div><div><strong>{t('Personal workspace')}</strong><span>{t('Version 0.1.2 · Local preview')}</span></div></div></div>
     </aside>
-    <main className="main-area">
+    <main className="main-area" ref={mainArea}>
        <div className="topbar"><div className="breadcrumb">{t('WORKSPACE')} <ChevronRight size={13}/> <strong>{t(NAV.find(n=>n.id===page)?.label ?? '')}</strong></div><span className="overlay-brand">Interview Copilot</span><div className="topbar-tools"><label className="ui-language"><span>{t('Idioma de interfaz')}</span><select value={language} onChange={event=>setLanguage(event.target.value === 'en' ? 'en' : 'es')} title={t('El idioma de interfaz no cambia el idioma de transcripción ni de la IA.')}><option value="en">EN — English</option><option value="es">ES — Español</option></select></label><div className={`status ${connected ? 'online':'offline'}`}>{connected ? <Check size={14}/> : <WifiOff size={14}/>} {t(connected ? 'API connected' : 'API offline')}</div>{nativeWindow?.customFrame && <div className="native-window-actions"><button type="button" title={t('Minimizar ventana')} aria-label={t('Minimizar ventana')} onClick={()=>{void window.copilotDesktop?.minimizeWindow().catch(()=>{});}}><Minus size={16}/></button><button type="button" title={t('Cerrar aplicación y detener captura')} aria-label={t('Cerrar aplicación y detener captura')} onClick={()=>{void window.copilotDesktop?.closeWindow().catch(()=>{});}}><X size={16}/></button></div>}</div></div>
        {!saved && <div role="status" aria-atomic="true" className="availability-notice app-notice" data-severity="warning">
          <TriangleAlert aria-hidden="true"/><div><strong>{t('Preferencia sin guardar')}</strong><p>{t('No se pudo guardar el idioma. Se aplicará solo hasta cerrar esta ventana.')}</p></div></div>}
@@ -163,20 +199,100 @@ function Overview({docs,navigate}: {docs: DocumentRecord[]; navigate: (p:Page)=>
   </>;
 }
 
-function Knowledge({docs,onUpload,refresh,showError,onNotice}: {docs: DocumentRecord[]; onUpload: (file:File)=>Promise<void>; refresh:()=>Promise<void>; showError:(err:unknown)=>void; onNotice:(s:string)=>void}) {
+const INDEX_STATES: Record<SemanticDocument['state'], string> = {
+  pending:'Indexación pendiente', indexing:'Indexando Q&A', completed:'Indexación completada', failed:'Falló la indexación',
+};
+const INDEX_ERRORS: Record<NonNullable<SemanticDocument['error']>, string> = {
+  model_unavailable:'Modelo o runtime local no disponible. Prepara el modelo con autorización explícita; después, reintenta. No se descargó ningún modelo.',
+  indexing_failed:'No se pudo completar la indexación. Los documentos y la búsqueda léxica siguen disponibles; reintenta solo lo pendiente.',
+  interrupted:'Indexación interrumpida. Los embeddings guardados se conservan; reintenta para completar lo pendiente.',
+};
+
+export function Knowledge({docs,onUpload,refresh,showError,onNotice}: {docs: DocumentRecord[]; onUpload: (file:File)=>Promise<void>; refresh:()=>Promise<void>; showError:(err:unknown)=>void; onNotice:(s:string)=>void}) {
   const {t} = useI18n();
   const picker = useRef<HTMLInputElement>(null);
   const [busy,setBusy] = useState(false);
   const [query,setQuery] = useState('');
   const [answer,setAnswer] = useState<AnswerResponse|null>(null);
   const [loading,setLoading] = useState(false);
+  const [semantic,setSemantic] = useState<SemanticStatus|null>(null);
+  const [semanticError,setSemanticError] = useState('');
+  const [checking,setChecking] = useState(true);
+  const [revision,setRevision] = useState(0);
+  const [indexing,setIndexing] = useState<string|null>(null);
+  const alive = useRef(false);
+  const indexRequest = useRef<AbortController|null>(null);
+  useEffect(()=>{
+    alive.current=true;
+    return ()=>{alive.current=false;indexRequest.current?.abort();};
+  },[]);
+  useEffect(()=>{
+    let disposed=false;
+    let timer:ReturnType<typeof setTimeout>|undefined;
+    let controller:AbortController;
+    setChecking(true);
+    const read=async()=>{
+      controller=new AbortController();
+      try {
+        const result=await api.semanticStatus(controller.signal);
+        if(disposed)return;
+        setSemantic(result);setSemanticError('');
+        if(result.worker_active || result.documents.some(doc=>doc.requested))timer=setTimeout(()=>void read(),1000);
+      } catch {
+        if(!disposed)setSemanticError('No se pudo consultar la indexación. Los documentos y la búsqueda léxica siguen disponibles. Actualiza el estado.');
+      } finally {if(!disposed)setChecking(false);}
+    };
+    void read();
+    return ()=>{disposed=true;clearTimeout(timer);controller?.abort();};
+  },[docs,revision]);
+  const index=async(id:string)=>{
+    if(indexRequest.current)return;
+    const controller=new AbortController();indexRequest.current=controller;setIndexing(id);
+    try {
+      await api.indexDocument(id,controller.signal);
+      if(alive.current){setSemanticError('');setRevision(value=>value+1);}
+    } catch {
+      if(alive.current)setSemanticError('No se pudo confirmar la solicitud. Puede seguir en curso. Actualiza el estado antes de reintentar; no se autorizaron descargas.');
+    } finally {
+      indexRequest.current=null;
+      if(alive.current)setIndexing(null);
+    }
+  };
   const select = async (file?: File) => { if (!file) return; setBusy(true); try {await onUpload(file);} finally {setBusy(false);} };
   const ask = async () => { if (query.trim().length < 3) return; setLoading(true); try {setAnswer(await api.answer(query.trim()));} catch(err) {showError(err);} finally {setLoading(false);} };
    const remove = async (id: string) => { if (!window.confirm(t('¿Eliminar este documento y su índice?'))) return; try {await api.deleteDocument(id);onNotice('Documento eliminado.');await refresh();} catch(err) {showError(err);} };
    return <><div className="page-header"><div><div className="eyebrow">{t('KNOWLEDGE MANAGEMENT')}</div><h1>{t('Knowledge Base')}</h1><p className="page-description">{t('Your source of truth for every interview answer.')}</p></div><button className="btn primary" onClick={()=>picker.current?.click()} disabled={busy}><Plus size={17}/> {t('Add documents')}</button></div>
     <input className="visually-hidden" ref={picker} type="file" accept=".xlsx,.docx,.pdf,.txt,.md" onChange={e=>{void select(e.target.files?.[0]);e.target.value='';}}/>
-     <div className="upload-zone" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();void select(e.dataTransfer.files?.[0]);}} onClick={()=>picker.current?.click()} role="button" tabIndex={0} onKeyDown={e=>{if(e.key==='Enter') picker.current?.click();}}><div className="upload-icon"><UploadCloud size={27}/></div><strong>{t(busy ? 'Importando documento...' : 'Arrastra un documento o haz clic para elegirlo')}</strong><span>{t('Excel (.xlsx), Word (.docx), PDF, TXT y Markdown · Máximo 20 MB')}</span></div>
-     <div className="panel"><div className="panel-title"><h2>{t('Imported documents')} <span className="counter">{docs.length}</span></h2><span className="hint">{t('Stored locally')}</span></div>{docs.length ? <div className="document-list">{docs.map(doc=><div className="document-row" key={doc.id}><div className="doc-icon">{doc.extension==='.xlsx'?<FileSpreadsheet size={22}/>:<File size={22}/>}</div><div className="doc-details"><strong>{doc.name}</strong><span>{doc.entry_count} {t('entries')} · {doc.extension.toUpperCase().slice(1)}</span></div><button title={t('Eliminar documento')} className="icon-btn" onClick={()=>void remove(doc.id)}><Trash2 size={17}/></button></div>)}</div>:<EmptyState icon={BookOpen} title={t('No documents yet')} body={t('Upload your first file to start building the knowledge base.')}/>}</div>
+      <div className="upload-zone" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();void select(e.dataTransfer.files?.[0]);}} onClick={()=>picker.current?.click()} role="button" tabIndex={0} onKeyDown={e=>{if(e.key==='Enter') picker.current?.click();}}><div className="upload-icon"><UploadCloud size={27}/></div><strong>{t(busy ? 'Importando documento...' : 'Arrastra un documento o haz clic para elegirlo')}</strong><span>{t('Excel (.xlsx), Word (.docx), PDF, TXT y Markdown · Máximo 20 MB')}</span></div>
+      <div className="availability-notice" data-severity={semanticError?'warning':'information'} role="status" aria-live="polite" aria-atomic="true">
+        {semanticError?<TriangleAlert aria-hidden="true"/>:<Info aria-hidden="true"/>}
+        <div><strong>{t(semanticError || !semantic ? 'Indexación automática: sin confirmar' : semantic.automatic_enabled
+          ? 'Indexación automática: activada' : 'Indexación automática: desactivada')}</strong>
+          <p>{t('Solo se indexan preguntas Q&A sin embeddings. Importar conserva la búsqueda léxica aunque falle el índice semántico.')}</p>
+          <p>{t(semantic?.automatic_enabled && !semanticError
+            ? 'Las nuevas importaciones Q&A se programan automáticamente. Los documentos anteriores siguen bajo control manual. Indexar y Reintentar no descargan modelos.'
+            : 'Activa COPILOT_AUTO_SEMANTIC_INDEX=1 en el backend y reinícialo para automatizar nuevas importaciones. Indexar y Reintentar no descargan modelos.')}</p>
+          {semantic?.deferred_for_live && semantic.documents.some(doc=>doc.requested) && <p>{t('Indexación en espera mientras Live está activo. Se reanudará al terminar la captura.')}</p>}
+          {semanticError && <p>{t(semanticError)}</p>}
+          <button type="button" className="btn secondary" disabled={checking || indexing!==null}
+            onClick={()=>setRevision(value=>value+1)}>{t(checking?'Actualizando estado…':'Actualizar estado')}</button>
+        </div>
+      </div>
+      <div className="panel"><div className="panel-title"><h2>{t('Imported documents')} <span className="counter">{docs.length}</span></h2><span className="hint">{t('Stored locally')}</span></div>{docs.length ? <div className="document-list">{docs.map(doc=>{
+        const state=semanticError?undefined:semantic?.documents.find(item=>item.document_id===doc.id);
+        const StateIcon=state?.state==='failed'?CircleX:state?.state==='completed'?CircleCheck:Clock;
+        return <div className="document-row" key={doc.id}><div className="doc-icon">{doc.extension==='.xlsx'?<FileSpreadsheet size={22}/>:<File size={22}/>}</div>
+          <div className="doc-details"><strong>{doc.name}</strong><span>{doc.entry_count} {t('entries')} · {doc.extension.toUpperCase().slice(1)}</span>
+            <div className="semantic-progress" data-state={state?.state} role="status" aria-atomic="true">
+              <StateIcon size={16} aria-hidden="true"/>{state ? <span>{t(state.questions===0?'Sin Q&A para indexar':INDEX_STATES[state.state])}
+                {state.questions>0 && <> · {state.indexed}/{state.questions} Q&A</>}</span>:<span>{t('Estado semántico sin confirmar')}</span>}
+            </div>
+            {state?.error && <p className="semantic-error">{t(INDEX_ERRORS[state.error] ?? INDEX_ERRORS.indexing_failed)}</p>}
+            {state && state.pending>0 && <button type="button" className="btn secondary semantic-index-action"
+              disabled={state.requested || indexing!==null} aria-label={`${t(state.state==='failed'?'Reintentar indexación':'Indexar')}: ${doc.name}`}
+              onClick={()=>void index(doc.id)}>{t(state.state==='failed'?'Reintentar indexación':'Indexar')}</button>}
+          </div><button title={t('Eliminar documento')} className="icon-btn" onClick={()=>void remove(doc.id)}><Trash2 size={17}/></button></div>;
+      })}</div>:<EmptyState icon={BookOpen} title={t('No documents yet')} body={t('Upload your first file to start building the knowledge base.')}/>}</div>
      <div className="panel query-panel"><div className="panel-title"><h2>{t('Test your knowledge base')}</h2><span className="hint">{t('Source-grounded retrieval')}</span></div><div className="ask-row"><Search size={19}/><input value={query} onChange={e=>setQuery(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')void ask();}} placeholder={t('What is refresh token rotation?')}/><button className="btn primary" disabled={loading||query.trim().length<3} onClick={()=>void ask()}>{t(loading?'Searching...':'Ask')} <Send size={16}/></button></div>{answer && <AnswerCard answer={answer}/>}</div>
   </>;
 }

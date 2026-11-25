@@ -22,12 +22,13 @@ def test_parsed_entry_public_imports_share_one_class():
     assert type(entries[0]) is ParsedEntry
 
 
-def test_parsed_entry_preserves_fields_types_and_required_constructor():
+def test_parsed_entry_preserves_required_fields_and_adds_optional_source_language():
     names = ["kind", "question", "answer", "body", "location"]
-    assert [field.name for field in fields(ParsedEntry)] == names
-    assert get_type_hints(ParsedEntry) == dict.fromkeys(names, str)
-    assert list(inspect.signature(ParsedEntry).parameters) == names
-    assert all(field.default is MISSING and field.default_factory is MISSING for field in fields(ParsedEntry))
+    assert [field.name for field in fields(ParsedEntry)] == names + ["language"]
+    assert get_type_hints(ParsedEntry) == {**dict.fromkeys(names, str), "language": str | None}
+    assert list(inspect.signature(ParsedEntry).parameters) == names + ["language"]
+    assert all(field.default is MISSING and field.default_factory is MISSING for field in fields(ParsedEntry)[:5])
+    assert fields(ParsedEntry)[5].default is None
     assert all(parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
                for parameter in inspect.signature(ParsedEntry).parameters.values())
 

@@ -141,14 +141,21 @@ test('Live layouts restore per-mode geometry without replacing windows, capture,
   invoke(h,'set-on-top',true);
   h.window.bounds={x:500,y:180,width:1100,height:760};
   assert.equal(invoke(h,'set-live-mode','compact').mode,'compact');
-  assert.deepEqual(JSON.parse(JSON.stringify(h.window.bounds)),{x:500,y:180,width:520,height:700});
-  h.window.bounds={x:700,y:250,width:460,height:600};
+  assert.deepEqual(JSON.parse(JSON.stringify(h.window.bounds)),{x:500,y:180,width:760,height:520});
+  assert.deepEqual(h.window.minimum,[720,400]);
+  h.window.bounds={x:600,y:200,width:900,height:600};
   invoke(h,'set-live-mode','compact'); // idempotent requests do not reset user geometry
-  assert.equal(h.window.bounds.width,460);
+  assert.equal(h.window.bounds.width,900);
   invoke(h,'set-live-mode','expanded');
   assert.deepEqual(JSON.parse(JSON.stringify(h.window.bounds)),{x:500,y:180,width:1100,height:760});
+  assert.deepEqual(h.window.minimum,[880,650]);
   invoke(h,'set-live-mode','compact');
-  assert.deepEqual(JSON.parse(JSON.stringify(h.window.bounds)),{x:700,y:250,width:460,height:600});
+  assert.deepEqual(JSON.parse(JSON.stringify(h.window.bounds)),{x:600,y:200,width:900,height:600});
+  // Saved compact geometry from older builds clamps to the new minimum instead of staying undersized.
+  h.window.bounds={x:700,y:250,width:600,height:300};
+  invoke(h,'set-live-mode','expanded');
+  invoke(h,'set-live-mode','compact');
+  assert.deepEqual(JSON.parse(JSON.stringify(h.window.bounds)),{x:700,y:250,width:720,height:400});
   assert.equal(h.windows.length,2);assert.equal(c.isDestroyed(),false);
   assert.equal(c.visible,false);assert.equal(h.window.skipTaskbar,true);
   assert.equal(h.trays.length,1);assert.equal(h.timers.size,1);
@@ -167,7 +174,9 @@ test('overlay IPC bounds alpha/layout, supplies opaque fallbacks and keeps nativ
   for(const alpha of [null,'0.9',NaN,Infinity,0.79,1.01])assert.equal(invoke(h,'set-live-opacity',alpha),false);
   assert.equal(invoke(h,'set-live-opacity',0.8).backgroundOpacity,0.8);
   assert.equal(h.window.background,'#00000000');assert.equal(h.window.resizable,false);
+  assert.deepEqual(h.window.minimum,[720,400]);assert.deepEqual(JSON.parse(JSON.stringify(h.window.bounds)),{x:100,y:100,width:760,height:520});
   invoke(h,'set-live-mode','expanded');assert.equal(h.window.background,'#0a0f19');assert.equal(h.window.resizable,true);
+  assert.deepEqual(h.window.minimum,[880,650]);
   invoke(h,'set-live-mode','compact');assert.equal(h.window.background,'#00000000');
   invoke(h,'set-live-opacity',1);assert.equal(h.window.background,'#0a0f19');assert.equal(h.window.resizable,true);
   for(const method of ['set-live-mode','set-live-opacity','window-minimize','window-close']) {
@@ -184,8 +193,16 @@ test('overlay IPC bounds alpha/layout, supplies opaque fallbacks and keeps nativ
   const small=await boot({workArea:{x:0,y:0,width:800,height:540}});
   small.window.bounds={x:2000,y:2000,width:1200,height:820};
   invoke(small,'set-live-mode','compact');
+  assert.deepEqual(JSON.parse(JSON.stringify(small.window.bounds)),{x:40,y:20,width:760,height:520});
+  assert.deepEqual(small.window.minimum,[720,400]);
   assert.ok(small.window.bounds.x+small.window.bounds.width<=800);
   assert.ok(small.window.bounds.y+small.window.bounds.height<=540);
+  // A work area smaller than the compact minimum cannot be exceeded; bounds stay visible.
+  const tiny=await boot({workArea:{x:10,y:20,width:640,height:360}});
+  tiny.window.bounds={x:900,y:900,width:1200,height:820};
+  invoke(tiny,'set-live-mode','compact');
+  assert.deepEqual(JSON.parse(JSON.stringify(tiny.window.bounds)),{x:10,y:20,width:640,height:360});
+  assert.deepEqual(tiny.window.minimum,[640,360]);
 });
 
 test('capture runs only in an isolated session, and media requires main-frame user gesture',async()=>{

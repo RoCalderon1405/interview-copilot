@@ -28,8 +28,67 @@ const {LiveWorkspace} = load('LiveWorkspace.tsx', {
   './liveState': {initialLiveState,receiveLiveEvent,restoreLiveState},
 });
 const {DeepgramSettings}=load('../settings/DeepgramSettings.tsx', {'../../api':{api:{}},'../../i18n':i18n});
-const {default:App} = load('../../App.tsx', {'./api':{api:{}},'./features/live/LiveWorkspace':{LiveWorkspace},'./features/settings/DeepgramSettings':{DeepgramSettings},'./i18n':i18n});
+const {default:App, focusScrollDelta} = load('../../App.tsx', {'./api':{api:{}},'./features/live/LiveWorkspace':{LiveWorkspace},'./features/settings/DeepgramSettings':{DeepgramSettings},'./i18n':i18n});
 const render = item => renderToStaticMarkup(React.createElement(LiveSuggestion,{item}));
+test('Knowledge exposes disabled/enabled indexing, EN/ES progress and retry without authorizing downloads; polling is scoped',async()=>{
+  try {for(language of ['es','en']) {
+    const docs=[{id:'d',name:'qa.md',extension:'.md',entry_count:1,imported_at:''}];
+    let status={automatic_enabled:false,worker_active:false,deferred_for_live:false,documents:[{
+      document_id:'d',name:'qa.md',questions:1,indexed:0,pending:1,state:'pending',requested:false,error:null,
+    }]};
+    let cursor=0,tree,indexCalls=0,lastSignal,hold=false;
+    const slots=[],pendingEffects=[],timers=new Map();let timerId=0;
+    const hooks={...React,
+      useState(initial){const i=cursor++;if(!(i in slots))slots[i]=initial;return [slots[i],v=>{slots[i]=typeof v==='function'?v(slots[i]):v;}];},
+      useRef(initial){const i=cursor++;return slots[i]??(slots[i]={current:initial});},
+      useEffect(effect,deps){const i=cursor++;if(!slots[i] || deps.some((v,j)=>v!==slots[i].deps[j])){
+        pendingEffects.push(()=>{slots[i]?.cleanup?.();slots[i]={deps,cleanup:effect()};});}},
+    };
+    const {api:knowledgeApi}=load('../../api.ts',{}, {AbortSignal,fetch:async(url,options)=>{
+      lastSignal=options.signal;
+      if(hold)return new Promise(()=>{});
+      if(url.endsWith('/semantic/index')){
+        assert.deepEqual(JSON.parse(options.body),{document_id:'d',background:true,allow_download:false});
+        indexCalls++;
+        status={...status,documents:[{...status.documents[0],error:null,
+          state:indexCalls===1?'pending':'completed',requested:indexCalls===1,indexed:indexCalls===1?0:1,pending:indexCalls===1?1:0}]};
+      }
+      return {ok:true,json:async()=>status};
+    }});
+    const {Knowledge}=load('../../App.tsx',{react:hooks,'./api':{api:knowledgeApi},'./i18n':i18n,
+      './features/live/LiveWorkspace':{LiveWorkspace},'./features/settings/DeepgramSettings':{DeepgramSettings},
+    },{AbortController,setTimeout:fn=>{timers.set(++timerId,fn);return timerId;},clearTimeout:id=>timers.delete(id)});
+    const render=()=>{cursor=0;tree=Knowledge({docs,onUpload:async()=>{},refresh:async()=>{},showError(){},onNotice(){}});
+      const html=renderToStaticMarkup(tree);while(pendingEffects.length)pendingEffects.shift()();return html;};
+    const settle=async()=>{render();await new Promise(setImmediate);render();await new Promise(setImmediate);return render();};
+    const find=(node,label)=>{if(!React.isValidElement(node))return;
+      if(node.type==='button' && node.props.children===label)return node;
+      for(const child of React.Children.toArray(node.props.children)){const found=find(child,label);if(found)return found;}};
+    const click=async(label)=>{render();const button=find(tree,label);assert.ok(button,label);assert.notEqual(button.props.disabled,true);
+      await button.props.onClick();return settle();};
+    const tick=async()=>{const [id,fn]=timers.entries().next().value;timers.delete(id);fn();return settle();};
+    let html=await settle();
+    assert.match(html,language==='en'?/Automatic indexing: disabled/:/Indexación automática: desactivada/);
+    assert.match(html,/COPILOT_AUTO_SEMANTIC_INDEX=1/);assert.equal(timers.size,0);
+    html=await click(language==='en'?'Index':'Indexar');
+    assert.match(html,language==='en'?/Indexing pending/:/Indexación pendiente/);assert.equal(timers.size,1);
+    status={...status,automatic_enabled:true,documents:[{...status.documents[0],state:'indexing'}]};
+    html=await tick();assert.match(html,language==='en'?/Automatic indexing: enabled/:/Indexación automática: activada/);
+    assert.match(html,language==='en'?/Indexing Q&amp;A/:/Indexando Q&amp;A/);
+    status={...status,documents:[{...status.documents[0],state:'failed',requested:false,error:'model_unavailable'}]};
+    html=await tick();assert.equal(timers.size,0);
+    assert.match(html,language==='en'?/No model was downloaded/:/No se descargó ningún modelo/);
+    assert.match(html,/qa.md/);assert.match(html,language==='en'?/Test your knowledge base/:/Prueba tu base de conocimiento/);
+    html=await click(language==='en'?'Retry indexing':'Reintentar indexación');
+    assert.match(html,language==='en'?/Indexing completed/:/Indexación completada/);assert.equal(indexCalls,2);
+    assert.equal(timers.size,0);
+    hold=true;await click(language==='en'?'Refresh status':'Actualizar estado');
+    assert.equal(lastSignal.aborted,false);
+    for(const slot of slots)slot?.cleanup?.();
+    assert.equal(lastSignal.aborted,true);assert.equal(timers.size,0);
+    assert.match(translations.window.copilotUi.translate(language,'qa.md: 1 entradas importadas.'),language==='en'?/entries imported/:/entradas importadas/);
+  }}finally{language='es';}
+});
 test('native Settings event navigates to the existing Deepgram section in EN/ES and unsubscribes',()=>{
   try { for(language of ['es','en']) {
     let cursor=0, mounted=false, callback, focused;
@@ -745,4 +804,12 @@ test('session presentation follows existing status events and clears interim tex
   assert.equal(state.provider,null);
   state=receiveLiveEvent(state,{type:'status',text:'Comprobando Faster-Whisper…'});
   assert.equal(state.provider,'Faster-Whisper');
+});
+
+test('focus guard keeps sticky topbar/header from covering focused main-area controls',()=>{
+  assert.equal(focusScrollDelta({top:200,bottom:300},150,520),0); // Already visible below the safe edge.
+  assert.equal(focusScrollDelta({top:120,bottom:300},150,520),-30); // Hidden under sticky layers: scroll up.
+  assert.equal(focusScrollDelta({top:400,bottom:560},150,520),48); // Below the viewport: reveal the bottom.
+  assert.equal(focusScrollDelta({top:500,bottom:900},150,520),350); // Tall control: stop at the safe edge.
+  assert.equal(focusScrollDelta({top:150,bottom:512},150,520),0); // Exact boundaries need no movement.
 });

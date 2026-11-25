@@ -49,9 +49,13 @@ function setLiveMode(win, mode) {
   if (liveMode === 'expanded') expandedMaximized = win.isMaximized();
   if (win.isMaximized()) win.unmaximize();
   const previous = modeBounds[liveMode];
-  const target = modeBounds[mode] ?? {...previous, width:520, height:700};
+  // Compact is side-by-side (transcript | Q&A), so it needs a wider, shorter
+  // default than the legacy stacked 520 x 700. Expanded stays unchanged.
+  const target = modeBounds[mode] ?? (mode === 'compact'
+    ? {...previous, width:760, height:520}
+    : {...previous, width:520, height:700});
   const area = screen.getDisplayMatching(target).workArea;
-  const minWidth = Math.min(mode === 'compact' ? 420 : 880, area.width);
+  const minWidth = Math.min(mode === 'compact' ? 720 : 880, area.width);
   const minHeight = Math.min(mode === 'compact' ? 400 : 650, area.height);
   const width = Math.min(area.width, Math.max(minWidth,target.width));
   const height = Math.min(area.height, Math.max(minHeight,target.height));

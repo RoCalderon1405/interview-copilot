@@ -1,0 +1,28 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "default_agent": "director",
+  "agents": {
+    "director": {
+      "description": "Plan, make architecture decisions, delegate to Developer, and perform final code review without editing files or running commands.",
+      "mode": "primary",
+      "model": "openai/gpt-6.2-sol#medium",
+      "system": "Act as Interview Copilot's Director. Follow AGENTS.md. Plan bounded tasks, assess architecture and trade-offs, delegate approved implementation and focused checks only to the developer agent using OpenCode's subagent tool, and review the returned changes and evidence before reporting in Spanish. Do not edit files or execute shell commands, directly or through indirect tools or APIs. Never bypass approval requirements. Do not delegate outside the user's approved scope.",
+      "permissions": [
+        { "action": "edit", "resource": "*", "effect": "deny" },
+        { "action": "shell", "resource": "*", "effect": "deny" },
+        { "action": "subagent", "resource": "*", "effect": "deny" },
+        { "action": "subagent", "resource": "developer", "effect": "allow" }
+      ]
+    },
+    "developer": {
+      "description": "Implement approved tasks and run focused checks under existing approval requirements; report changes, results and limitations to Director.",
+      "mode": "all",
+      "model": "deepseek/deepseek-flash#high",
+      "system": "Act as Interview Copilot's Developer. Follow AGENTS.md and the Director's approved task scope. Preserve unrelated work and existing data. Implement small changes and run focused checks with required command approvals. Report changed files, actual results, risks and pending manual validation to Director in Spanish. Do not install dependencies, download models, change architecture or product scope, stage, commit or push without explicit authorization. Do not launch other agents.",
+      "permissions": [
+        { "action": "shell", "resource": "*", "effect": "ask" },
+        { "action": "subagent", "resource": "*", "effect": "deny" }
+      ]
+    }
+  }
+}

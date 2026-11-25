@@ -341,6 +341,33 @@ def detect_questions(text: str, limit: int = MAX_QUESTION_CANDIDATES) -> list[st
     return candidates
 
 
+def _single_question_candidate(text: str, limit: int = 1) -> list[str]:
+    """Return one candidate without splitting a coordinated compound request.
+
+    Used only for an assembled Deepgram behavioral request, where the shared
+    detector would cut the coordinated follow-up ("... What was slow and what
+    did you change") into a second question. The same gates still apply: a
+    request cue or direct question is required, quoted text cannot create the
+    candidate, and operational display checks, reported speech, greetings and
+    the candidate limit are unchanged.
+    """
+    if limit < 1:
+        return []
+    visible = _QUOTED_TEXT.sub(lambda match: " " * len(match.group()), text)
+    prefix = _clean_question_start(visible)
+    normalized = normalize(prefix)
+    if not (_EN_CUES.match(normalized) or _ES_CUES.match(normalized)
+            or _DIRECT_QUESTION.match(normalized) or visible.rstrip().endswith("?")):
+        return []
+    if _REPORTED_SPEECH.search(normalize(visible)):
+        return []
+    candidate = _clean_question_start(text).rstrip(" \t?!.;,").strip()
+    key = normalize(candidate)
+    if not key or key in _NON_INTERVIEW_UTTERANCES or _is_capture_observation_request(candidate):
+        return []
+    return [candidate]
+
+
 class StablePartialQuestion:
     """Return only stable question-shaped Vosk partials, once per candidate.
 
@@ -414,6 +441,642 @@ class RecentFinalDedupe:
             self._seen.pop(next(iter(self._seen)))
         self._seen[key] = now
         return False
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Deepgram candidate assembly (connection-local, after the raw relay)
+# ---------------------------------------------------------------------------
+
+# Deepgram Nova-3 finalizes each endpoint separately (the configured 300 ms
+# endpointing), so a natural pause can split one spoken question into two finals.
+# These bounds keep a truncated fragment from being retrieved as a question and
+# keep every hold strictly limited.
+MAX_ASSEMBLED_QUESTION_CHARS = 240
+MAX_ASSEMBLED_FRAGMENTS = 3
+ASSEMBLY_MAX_GAP_SECONDS = 8.0
+# A behavioral request ("tell me about a time when ...") is complete once its
+# relative clause arrives, but its coordinated follow-up ("and what did you
+# change") usually lands on the next endpoint. Only that one accumulated
+# behavioral request is stabilized for a short bounded window; no other question
+# is delayed. The absolute cap keeps repeated noise from extending the window.
+ASSEMBLY_SETTLE_SECONDS = 1.0
+ASSEMBLY_SETTLE_MAX_SECONDS = 2.0
+
+# Provider punctuation ends an endpoint, not the thought.
+_ASSEMBLY_EDGE_PUNCTUATION = "?!.;,…—–-"
+
+# Noise that may appear between two fragments of the same spoken question.
+_ASSEMBLY_FILLERS = frozenset({
+    "um", "uh", "erm", "hmm", "mm", "ah", "oh", "eh", "right", "okay", "ok",
+    "bueno", "pues", "este", "verdad", "so", "and", "y", "entonces",
+})
+# Words that open a request frame but carry no answerable content on their own.
+# Predicate-like fillers ("okay", "well", "now") stay out, so ordinary yes/no
+# questions such as "Is that okay?" are never held as incomplete.
+_ASSEMBLY_FRAME_TOKENS = frozenset({
+    "so", "and", "or", "but", "then", "also", "just", "please",
+    "could", "can", "would", "will", "do", "does", "did",
+    "are", "is", "was", "were", "have", "has", "you", "your", "me", "us", "we",
+    "i", "tell", "explain", "describe", "walk", "through", "give", "example",
+    "of", "about", "with", "for", "to", "a", "an", "the", "what", "why", "how",
+    "when", "where", "which", "who", "whom", "whose", "let", "ask", "question",
+    "questions", "difference", "first", "second",
+    "puedes", "podrias", "nos", "cuentame", "cuentanos", "contarme", "contarnos",
+    "contarte", "hablame", "hablanos", "hablarte", "explica", "explicame",
+    "explicarte", "explicanos", "describeme", "decirme", "dime", "compara",
+    "dame", "un", "una", "unos", "unas", "ejemplo", "de", "del", "sobre", "o",
+    "pero", "bueno", "pues", "este", "que", "cual", "cuales", "como", "cuando",
+    "donde", "quien", "cuanto", "por", "si", "tu", "tus", "su", "sus", "es",
+    "son", "era", "eran", "hay", "tienes", "tiene", "haces", "harias",
+    "manejas", "manejarias", "funciona", "diferencia", "primero", "segundo",
+})
+# Words that cannot end a question: the final still expects more speech.
+_ASSEMBLY_TRAILING_WORDS = frozenset({
+    "and", "or", "but", "so", "because", "to", "of", "the", "a", "an", "that",
+    "much", "many", "long", "often",
+    "y", "o", "pero", "de", "del", "el", "la", "los", "las", "un", "una",
+    "para", "con", "porque", "entonces", "cuanto", "cuanta",
+})
+# "the difference between rest" needs its second term before it is answerable.
+_ASSEMBLY_COMPARISON_JOINERS = frozenset({"and", "or", "versus", "vs", "to", "y", "o"})
+# A yes/no question with a subject and a predicate is complete even when every
+# word also belongs to the frame vocabulary ("Is that okay?").
+_ASSEMBLY_YES_NO_QUESTION = re.compile(
+    r"^(?:is|are|was|were|am|do|does|did|can|could|would|will|should|has|have)\s+"
+    r"(?:you|we|they|he|she|it|this|that|these|those|there|i)\s+\S"
+)
+# Explicit introduction/context. The words before it must also be content-free,
+# so a complete question followed by "next question" is never held.
+_ASSEMBLY_INTRO_TAILS = (
+    "here s the question", "here s my question", "here s a question",
+    "here is the question", "the question is", "my question is",
+    "the next question is", "next question is", "next question",
+    "i have a question", "i have one question", "i have another question",
+    "i have a couple of questions", "i have two questions",
+    "i have a quick question", "we have a question", "a quick question",
+    "one quick question", "let me ask you a question", "let me ask you",
+    "let me ask", "may i ask", "can i ask",
+    "la pregunta es", "mi pregunta es", "una pregunta", "una pregunta rapida",
+    "la siguiente pregunta es", "siguiente pregunta",
+    "tengo una pregunta", "tengo un par de preguntas", "tengo otra pregunta",
+    "dejame hacerte una pregunta", "te hago una pregunta",
+)
+# Only these introductions can be joined: the shared detector already splits
+# them as a final boundary, so the candidate excludes the introductory words.
+_ASSEMBLY_BOUNDARY_INTROS = frozenset({
+    "here s the question", "here s my question", "the question is",
+    "my question is", "next question", "la pregunta es", "mi pregunta es",
+    "siguiente pregunta",
+})
+# Narrow anchored indirect prompts. Only an explicit wh-complement is used as
+# the candidate; the transcript keeps the full original wording.
+_ASSEMBLY_INDIRECT_FRAME = re.compile(
+    r"^(?:(?:i|we)(?:['’]?d| would)\s+like to\s+(?:know|understand|hear)"
+    r"|(?:i|we)\s+want to know"
+    r"|i(?:['’]?m| am)\s+curious about"
+    r"|me\s+gustar[ií]a\s+(?:saber|entender|conocer)"
+    r"|nos\s+gustar[ií]a\s+(?:saber|entender)"
+    r"|quisiera\s+(?:saber|entender)"
+    r"|quiero\s+saber"
+    r"|me\s+interesa\s+saber)\b[\s,:;—–-]*",
+    re.IGNORECASE,
+)
+_ASSEMBLY_WH_START = re.compile(
+    r"^(?:what|why|how|when|where|which|who|whom|whose|"
+    r"que|cual|cuales|como|cuando|donde|quien|cuanto|por que)\b"
+)
+_ASSEMBLY_CONDITIONAL_START = re.compile(r"^(?:if|whether|si)\b")
+# English auxiliaries right after a wh-word mark an independent question. Spanish
+# has no such inversion, so "cómo funciona X" stays a valid subordinate clause.
+_ASSEMBLY_EN_AUXILIARY = frozenset({
+    "am", "is", "are", "was", "were", "do", "does", "did", "can", "could",
+    "would", "will", "should", "shall", "may", "might", "must", "has", "have",
+    "had",
+})
+# Sentence subjects: a short fragment that starts with one is prose, not a complement.
+_ASSEMBLY_SUBJECT_PRONOUNS = frozenset({
+    "i", "we", "they", "he", "she", "it", "you", "yo", "nosotros", "nosotras",
+    "ellos", "ellas", "usted", "ustedes",
+})
+# A held fragment that stops on an auxiliary or modal has an open verb slot.
+_ASSEMBLY_OPEN_SLOT_ENDINGS = frozenset({
+    "am", "is", "are", "was", "were", "do", "does", "did", "can", "could",
+    "would", "will", "should", "shall", "may", "might", "must", "has", "have",
+    "had", "harias", "haria", "haras", "hara", "podrias", "podria",
+    "deberias", "deberia",
+})
+# Behavioral context tails: the request has not asked anything answerable until
+# its relative clause arrives ("Can you tell me about a time" + "when ...",
+# "Cuéntame sobre una vez" + "que ..."). Longest tail first.
+_ASSEMBLY_BEHAVIORAL_TAILS = tuple(sorted({
+    "about a time", "about a situation", "about an occasion", "about a moment",
+    "about a time when", "a time when", "a time where", "a situation where",
+    "an occasion when", "a moment when", "about a time that",
+    "sobre una vez", "sobre una ocasion", "sobre una situacion",
+    "sobre un momento", "de una vez que", "de una ocasion en la que",
+    "de una situacion en la que", "alguna vez", "una vez", "una ocasion",
+    "una situacion",
+}, key=len, reverse=True))
+# Interrogative words that can end an unfinished coordinated follow-up
+# ("and what", "y qué"). They are not content by themselves.
+_ASSEMBLY_WH_WORDS = frozenset({
+    "what", "why", "how", "when", "where", "which", "who", "whom", "whose",
+    "que", "cual", "cuales", "como", "cuando", "donde", "quien", "cuanto",
+})
+# A coordinated follow-up continues the same behavioral request: a bare
+# conjunction plus an interrogative ("and what did you change", "y qué
+# cambiaste"). A separate question with its own subject or topic is not matched.
+_ASSEMBLY_COORDINATED_FOLLOW_UP = re.compile(
+    r"^(?:and|y)\s+(?:what|why|how|when|where|which|who|whom|whose|"
+    r"por que|que|cual|cuales|como|cuando|donde|quien|cuanto)\b"
+)
+# A second direct question left uncoordinated inside one accumulated fragment
+# ("... a back end service What was slow"). Provider punctuation is missing in
+# real Nova-3 finals, so this lexical signal is the conservative ambiguity mark.
+_ASSEMBLY_EMBEDDED_QUESTION = re.compile(
+    r"\b(?:(?:what|why|how|when|where|which|who)\s+"
+    r"(?:is|are|was|were|do|does|did|can|could|would|will|should|has|have)\b|"
+    r"(?:que|cual|cuales|como|cuando|donde|quien|cuanto)\s+"
+    r"(?:es|son|era|eran|fue|fueron|esta|estan|hay|tiene|tienen)\b)"
+)
+# Openings that make a complement a noun phrase instead of a clause.
+_ASSEMBLY_DETERMINER_START = frozenset({
+    "the", "a", "an", "this", "that", "these", "those", "some", "any", "both",
+    "each", "every", "no", "your", "their", "our", "its", "his", "her", "my",
+    "about", "with", "between", "in", "on", "for", "to", "of", "from", "under",
+    "over", "across",
+    "el", "la", "los", "las", "un", "una", "unos", "unas", "este", "esta",
+    "estos", "estas", "ese", "esa", "mi", "mis", "tu", "tus", "su", "sus",
+    "nuestro", "nuestra", "sobre", "entre", "con", "sin", "para", "por", "en",
+    "de", "del",
+})
+# High-frequency finite verb forms, used only to reject clause-shaped prose.
+_ASSEMBLY_FINITE_FORMS = frozenset({
+    "failed", "fails", "works", "worked", "broke", "breaks", "went", "goes",
+    "came", "comes", "made", "makes", "took", "takes", "got", "gets", "gave",
+    "gives", "found", "finds", "kept", "left", "ran", "runs", "saw", "says",
+    "said", "told", "thought", "brought", "built", "became", "seems", "looks",
+    "appears", "needs", "uses", "used", "happened", "changed", "stopped",
+    "started", "migrated", "deployed",
+    "es", "son", "era", "eran", "fue", "fueron", "esta", "estan", "hay",
+    "tiene", "tienen", "hace", "hacen", "funciona", "funcionan", "fallo",
+    "fallaron", "trabaja", "trabajan", "trabajamos", "estuve", "estuvo",
+    "tenemos", "hemos", "hicimos",
+})
+
+
+def _assembly_filler_only(key: str) -> bool:
+    """True when the normalized final contains only filler or connective noise."""
+    return all(token in _ASSEMBLY_FILLERS for token in key.split())
+
+
+def _assembly_intro_prefix(key: str) -> str | None:
+    """Return the words preceding an explicit introduction, or None."""
+    for tail in _ASSEMBLY_INTRO_TAILS:
+        if key == tail:
+            return ""
+        if key.endswith(" " + tail):
+            return key[: -(len(tail) + 1)]
+    return None
+
+
+def _assembly_yes_no_question(key: str) -> bool:
+    """True for a complete yes/no question even when built from frame words."""
+    match = _ASSEMBLY_YES_NO_QUESTION.match(key)
+    return bool(match and key.split()[2] not in _ASSEMBLY_FRAME_TOKENS)
+
+
+def _assembly_incomplete_syntax(key: str) -> bool:
+    """Detect that a final still expects more speech (narrow, lexical rules)."""
+    tokens = key.split()
+    if not tokens:
+        return True
+    if tokens[-1] in _ASSEMBLY_TRAILING_WORDS or tokens[-1] in _ASSEMBLY_OPEN_SLOT_ENDINGS:
+        return True
+    for opener in ("between", "entre"):
+        if opener in tokens:
+            rest = tokens[tokens.index(opener) + 1:]
+            if not any(token in _ASSEMBLY_COMPARISON_JOINERS for token in rest):
+                return True
+    return False
+
+
+def _assembly_behavioral_context(key: str) -> bool:
+    """True when a request stops on an unfinished behavioral context tail.
+
+    The words before the tail must be content-free request frame words, so
+    "tell me about a time" and "cuéntame sobre una vez" hold while prose such as
+    "we were talking about a time" does not.
+    """
+    for tail in _ASSEMBLY_BEHAVIORAL_TAILS:
+        if key == tail:
+            return False
+        if not key.endswith(" " + tail):
+            continue
+        prefix = key[: -(len(tail) + 1)]
+        tokens = prefix.split()
+        return bool(tokens) and set(tokens) <= _ASSEMBLY_FRAME_TOKENS
+    return False
+
+
+def _assembly_coordinated_follow_up(key: str) -> bool:
+    """True for "and what did you change"-shaped continuations of a request."""
+    return bool(_ASSEMBLY_COORDINATED_FOLLOW_UP.match(key))
+
+
+def _assembly_coordinated_incomplete(key: str) -> bool:
+    """True when a coordinated follow-up stops before its verb is spoken.
+
+    "and what did you" and "y qué" still expect a predicate; emitting them would
+    produce an unanswerable compound. The check is lexical and deliberately
+    narrow to the coordinated form, not general parsing.
+    """
+    tokens = key.split()
+    if not tokens or tokens[-1] in _ASSEMBLY_WH_WORDS:
+        return True
+    return (len(tokens) >= 2 and tokens[-2] in _ASSEMBLY_EN_AUXILIARY
+            and tokens[-1] in _ASSEMBLY_SUBJECT_PRONOUNS)
+
+
+def _assembly_embedded_question(key: str) -> bool:
+    """True when a second, uncoordinated direct question starts inside the text.
+
+    An expected coordinated follow-up ("and what did you change") is ignored.
+    This is an ambiguity signal, not a sentence boundary: it only prevents
+    elapsed quiet from being treated as completion.
+    """
+    for match in _ASSEMBLY_EMBEDDED_QUESTION.finditer(key):
+        before = key[:match.start()].rstrip()
+        if not before:
+            continue
+        if before.rsplit(" ", 1)[-1] in {"and", "y", "or", "o"}:
+            continue
+        return True
+    return False
+
+
+def _assembly_compound_complete(key: str) -> bool:
+    """Return True only for positive completion evidence of a settled compound.
+
+    Provider punctuation is not evidence: it ends an endpoint, not the thought.
+    Completion requires closed syntax, no unfinished coordinated suffix and no
+    second uncoordinated direct question ("... a service What was slow"). The
+    coordinated follow-up itself is the explicit completion when it arrives and
+    is joined by the caller without this check.
+    """
+    return (_assembly_hold_kind(key) is None
+            and not _assembly_coordinated_incomplete(key)
+            and not _assembly_embedded_question(key))
+
+
+def _assembly_hold_kind(key: str) -> str | None:
+    """Classify an incomplete final by shape; None means it can stand alone."""
+    if not key or key in _NON_INTERVIEW_UTTERANCES:
+        return None
+    if _assembly_yes_no_question(key):
+        return None
+    intro_prefix = _assembly_intro_prefix(key)
+    if intro_prefix is not None and (not intro_prefix or set(intro_prefix.split()) <= _ASSEMBLY_FRAME_TOKENS):
+        return "intro"
+    if _assembly_behavioral_context(key):
+        return "behavioral"
+    tokens = key.split()
+    if all(token in _ASSEMBLY_FRAME_TOKENS for token in tokens):
+        return "wh" if _ASSEMBLY_WH_START.match(key) else "request"
+    if _assembly_incomplete_syntax(key):
+        return "trailing"
+    return None
+
+
+def _assembly_continuation_shape(key: str, *, sentence_ended: bool = False) -> str | None:
+    """Recognize a positive continuation shape: subordinate wh or noun phrase.
+
+    Anything else - an independent question, a clause-shaped statement or
+    arbitrary prose - returns None and must never be merged into a hold. A short
+    fragment is only accepted as a noun phrase when it is not a subject-leading
+    sentence and the provider did not end it as an explicit sentence.
+    """
+    tokens = key.split()
+    if not tokens:
+        return None
+    if tokens[0] in _ASSEMBLY_EN_AUXILIARY:
+        return None  # "Is that all?", "Does it cost?": an independent yes/no question
+    if _ASSEMBLY_WH_START.match(key):
+        if len(tokens) > 1 and tokens[1] in _ASSEMBLY_EN_AUXILIARY:
+            return None
+        return "wh"
+    if tokens[0] in _ASSEMBLY_DETERMINER_START:
+        if len(tokens) > 8:
+            return None
+        if any(token in _ASSEMBLY_EN_AUXILIARY or token in _ASSEMBLY_FINITE_FORMS
+               for token in tokens[1:]):
+            return None
+        return "np"
+    if sentence_ended or tokens[0] in _ASSEMBLY_SUBJECT_PRONOUNS:
+        return None  # "I agree." and other short prose are not complements
+    if len(tokens) <= 3 and not any(token in _ASSEMBLY_FINITE_FORMS for token in tokens):
+        return "np"
+    return None
+
+
+def _assembly_open_verb_slot(pending: str | None) -> bool:
+    """True when the held fragment stops on an auxiliary or modal verb slot."""
+    tokens = normalize(pending or "").split()
+    return bool(tokens) and tokens[-1] in _ASSEMBLY_OPEN_SLOT_ENDINGS
+
+
+def _assembly_commands_continuation(key: str, sentence_ended: bool) -> bool:
+    """Accept a narrow verb phrase as the complement of an open verb slot.
+
+    Only used after a held fragment that already stopped on an auxiliary
+    ("how you would"), so ordinary statements, independent questions and
+    sentence-ended prose remain excluded.
+    """
+    tokens = key.split()
+    if not tokens or sentence_ended or len(tokens) > 6:
+        return False
+    if tokens[0] in _ASSEMBLY_SUBJECT_PRONOUNS or tokens[0] in _ASSEMBLY_EN_AUXILIARY:
+        return False
+    return not any(token in _ASSEMBLY_FINITE_FORMS for token in tokens)
+
+
+def _assembly_indirect(text: str) -> tuple[bool, str]:
+    """Split a narrow anchored indirect prompt; the complement is '' when absent."""
+    match = _ASSEMBLY_INDIRECT_FRAME.match(text)
+    if not match:
+        return False, ""
+    return True, text[match.end():].strip()
+
+
+@dataclass(frozen=True)
+class AssembledCandidate:
+    """One Deepgram candidate decision produced by ``DeepgramQuestionAssembly``.
+
+    ``compound`` marks a behavioral request assembled from a context tail, its
+    relative clause and an optional coordinated follow-up: the shared detector
+    must not split that follow-up into a second question.
+    """
+
+    text: str
+    compound: bool = False
+
+
+class DeepgramQuestionAssembly:
+    """Hold one clearly incomplete Deepgram final and join it with the next final.
+
+    Deepgram finalizes per endpoint, so a 300 ms pause can cut a spoken question
+    in half. This helper is connection-local and runs after the raw transcript is
+    relayed: transcript events and their order never change, and a held fragment
+    is discarded rather than emitted as a question. A join requires a positive
+    shape: a subordinate wh clause ("how authentication works"), a narrow noun
+    phrase for an open object slot ("OAuth"), an explicit wh-complement after a
+    narrow indirect prompt ("I'd like to know how ...") or a relative clause
+    after a behavioral context tail ("about a time", "una vez"). Independent
+    questions and clause-shaped prose are never concatenated: the held fragment
+    is dropped and only the new final is considered. A join that is still
+    incomplete ("the difference between rest") keeps holding within the same
+    bounds.
+
+    A behavioral context completed by its relative clause is a compound request
+    whose coordinated follow-up ("and what did you change") usually arrives on
+    the next endpoint. That one accumulated candidate is stabilized instead of
+    being emitted immediately. A completed compound uses the short
+    ``ASSEMBLY_SETTLE_SECONDS`` window (absolute cap
+    ``ASSEMBLY_SETTLE_MAX_SECONDS``); an ambiguous one - an unfinished
+    coordinated suffix or a second uncoordinated question inside the fragment -
+    stays joinable up to ``ASSEMBLY_MAX_GAP_SECONDS`` only. When that deadline
+    expires, an ambiguous candidate is dropped rather than retrieved: elapsed
+    quiet and provider punctuation are not completion evidence. The deadline
+    belongs to the caller: ``settle_deadline`` reports the remaining time and
+    ``take_settled`` consumes a completed candidate, so no background timer is
+    created here and a discarded hold is never flushed.
+
+    Bounds are explicit: ``MAX_ASSEMBLED_QUESTION_CHARS``,
+    ``MAX_ASSEMBLED_FRAGMENTS``, ``ASSEMBLY_MAX_GAP_SECONDS`` measured at the
+    next final only, and the settle window above. The rules are lexical
+    heuristics, not semantic understanding: a fragment that ends on a content
+    word ("Explain why the database") cannot be recognized as truncated.
+    """
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic):
+        self.clock = clock
+        self._pending: str | None = None
+        self._kind = ""
+        self._fragments = 0
+        self._pending_at = 0.0
+        self._settle_at = 0.0
+
+    def observe(self, text: str) -> list[AssembledCandidate]:
+        """Return the ordered candidates to evaluate now; usually none or one.
+
+        A settled compound and the unrelated final that arrives after its window
+        are both returned, oldest first, so neither question is lost.
+        """
+        text = text.strip()
+        if not text:
+            return []
+        now = self.clock()
+        if self._pending is not None and now - self._pending_at > ASSEMBLY_MAX_GAP_SECONDS:
+            self.reset()
+        key = normalize(text)
+        if not key:
+            return []
+        if _assembly_filler_only(key):
+            # Filler noise between fragments keeps a hold but never creates one.
+            return []
+        framed, complement = _assembly_indirect(text)
+        if framed:
+            self.reset()
+            complement_key = normalize(complement)
+            if (complement and (_ASSEMBLY_WH_START.match(complement_key)
+                                or _ASSEMBLY_CONDITIONAL_START.match(complement_key))):
+                if _assembly_hold_kind(complement_key) is not None:
+                    # The complement is itself truncated: hold it, never retrieve it.
+                    return self._hold(complement, "indirect", now)
+                if len(complement) <= MAX_ASSEMBLED_QUESTION_CHARS:
+                    return [AssembledCandidate(complement.rstrip(_ASSEMBLY_EDGE_PUNCTUATION))]
+                return []
+            if not complement:
+                return self._hold(text, "indirect", now)
+            return []
+        if self._pending is None:
+            return self._start(text, key, now)
+        if key == normalize(self._pending):
+            return []
+        return self._continue(text, key, now)
+
+    def reset(self) -> None:
+        """Discard the held fragment; stop, restart and errors never flush it."""
+        self._pending = None
+        self._kind = ""
+        self._fragments = 0
+        self._pending_at = 0.0
+        self._settle_at = 0.0
+
+    def settle_deadline(self) -> float | None:
+        """Remaining seconds before the settled compound is resolved, or None.
+
+        A completed compound uses the short stabilization window. An ambiguous
+        one stays joinable up to the normal gap bound; its expiry drops it
+        instead of delivering a possibly incomplete prefix.
+        """
+        if self._kind != "settle" or self._pending is None:
+            return None
+        if _assembly_compound_complete(normalize(self._pending)):
+            deadline = min(self._pending_at + ASSEMBLY_SETTLE_SECONDS,
+                           self._settle_at + ASSEMBLY_SETTLE_MAX_SECONDS)
+        else:
+            deadline = self._pending_at + ASSEMBLY_MAX_GAP_SECONDS
+        return max(0.0, deadline - self.clock())
+
+    def take_settled(self) -> AssembledCandidate | None:
+        """Consume a completed settled compound; drop an ambiguous one.
+
+        Expiry is not completion: an ambiguous accumulated fragment is discarded
+        without retrieval, dedupe or generation.
+        """
+        if self._kind != "settle" or self._pending is None:
+            return None
+        if not _assembly_compound_complete(normalize(self._pending)):
+            self.reset()
+            return None
+        candidate = AssembledCandidate(self._pending, compound=True)
+        self.reset()
+        return candidate
+
+    def _continue(self, text: str, key: str, now: float) -> list[AssembledCandidate]:
+        clean = _clean_question_start(text)
+        clean_key = normalize(clean)
+        sentence_ended = text.rstrip().endswith(".")
+        if self._kind == "settle":
+            if _assembly_coordinated_follow_up(key):
+                return self._join_coordinated(text, now)
+            pending_key = normalize(self._pending or "")
+            if (_assembly_coordinated_incomplete(pending_key)
+                    and _assembly_commands_continuation(clean_key, sentence_ended)):
+                return self._join(text, now)
+            # A different final arrived first. Only a completed compound may be
+            # emitted; an ambiguous one is dropped, never retrieved as a prefix.
+            settled = self._pending or ""
+            complete = _assembly_compound_complete(normalize(settled))
+            self.reset()
+            prefix = [AssembledCandidate(settled, compound=True)] if complete else []
+            return [*prefix, *self._start(text, key, now)]
+        if _assembly_hold_kind(clean_key) == "intro":
+            # A new explicit introduction ends the previous thought.
+            self.reset()
+            return self._start(text, key, now)
+        shape = _assembly_continuation_shape(clean_key, sentence_ended=sentence_ended)
+        commands = (_assembly_open_verb_slot(self._pending)
+                    and _assembly_commands_continuation(clean_key, sentence_ended))
+        if self._kind == "indirect":
+            framed, complement = _assembly_indirect(self._pending or "")
+            if framed and not complement:
+                # A bare frame carries no content: evaluate the new final alone,
+                # through the same hold/complete logic as any other final.
+                self.reset()
+                return self._start(text, key, now)
+            if shape is None and not commands:
+                self.reset()
+                return self._start(text, key, now)
+            return self._join(text, now)
+        if shape is None and not commands:
+            self.reset()
+            return self._start(text, key, now)
+        if shape is not None and self._kind == "wh" and shape == "wh":
+            self.reset()
+            return self._start(text, key, now)
+        if self._kind == "intro" and (shape != "wh" or not self._boundary_intro()):
+            self.reset()
+            return self._start(text, key, now)
+        return self._join(text, now)
+
+    def _join(self, text: str, now: float) -> list[AssembledCandidate]:
+        """Bounded join; a still-incomplete result keeps holding."""
+        combined = f"{self._pending} {text}"
+        if not self._bounded(combined):
+            self.reset()
+            return self._start(text, normalize(text), now)
+        if _assembly_hold_kind(normalize(combined)) is not None:
+            self._pending = combined.rstrip(_ASSEMBLY_EDGE_PUNCTUATION)
+            self._fragments += 1
+            self._pending_at = now
+            return []
+        if self._kind == "behavioral":
+            # The relative clause completed the behavioral request, but one
+            # coordinated follow-up may still follow: settle it, never evaluate
+            # the fragments separately. Provider punctuation is not completion
+            # evidence: a period ends the endpoint, not the thought, so a
+            # sentence-ended clause is stabilized exactly like an unpunctuated one.
+            self._pending = combined.rstrip(_ASSEMBLY_EDGE_PUNCTUATION)
+            self._kind = "settle"
+            self._fragments += 1
+            self._pending_at = now
+            self._settle_at = now
+            return []
+        compound = self._kind in {"behavioral", "settle"}
+        self.reset()
+        return [AssembledCandidate(combined, compound=compound)]
+
+    def _join_coordinated(self, text: str, now: float) -> list[AssembledCandidate]:
+        """Append the coordinated follow-up and emit the compound request once."""
+        combined = f"{self._pending} {text}"
+        if not self._bounded(combined):
+            self.reset()
+            return self._start(text, normalize(text), now)
+        combined = combined.rstrip(_ASSEMBLY_EDGE_PUNCTUATION)
+        if (_assembly_hold_kind(normalize(combined)) is not None
+                or _assembly_coordinated_incomplete(normalize(combined))):
+            # The follow-up itself is truncated ("and what did you"): keep the
+            # one hold instead of emitting an incomplete compound. The ordinary
+            # fragment bound still applies.
+            self._pending = combined
+            self._fragments += 1
+            self._pending_at = now
+            return []
+        self.reset()
+        return [AssembledCandidate(combined, compound=True)]
+
+    def _start(self, text: str, key: str, now: float) -> list[AssembledCandidate]:
+        kind = _assembly_hold_kind(key)
+        if kind is None:
+            return [AssembledCandidate(text)]
+        return self._hold(text, kind, now)
+
+    def _hold(self, text: str, kind: str, now: float) -> list[AssembledCandidate]:
+        if len(text) > MAX_ASSEMBLED_QUESTION_CHARS:
+            return []
+        # Provider punctuation ends the endpoint, not the thought: drop it from the
+        # held fragment so a join never creates a sentence boundary. The relayed
+        # transcript keeps the original wording and punctuation.
+        self._pending = text.rstrip(_ASSEMBLY_EDGE_PUNCTUATION)
+        self._kind = kind
+        self._fragments = 1
+        self._pending_at = now
+        self._settle_at = 0.0
+        return []
+
+    def _bounded(self, combined: str) -> bool:
+        return (len(combined) <= MAX_ASSEMBLED_QUESTION_CHARS
+                and self._fragments < MAX_ASSEMBLED_FRAGMENTS)
+
+    def _boundary_intro(self) -> bool:
+        key = normalize(self._pending or "")
+        return any(key == tail or key.endswith(" " + tail) for tail in _ASSEMBLY_BOUNDARY_INTROS)
+
+
+@dataclass
+class AssemblySettleWindow:
+    """One connection-owned stabilization deadline for a settled compound.
+
+    ``delivering`` becomes true once the deadline elapsed and the candidate is
+    being emitted, so a newer final never cancels a delivery that already
+    started. The task is always owned (and drained) by the connection.
+    """
+
+    task: asyncio.Task | None = None
+    delivering: bool = False
 
 
 class LiveTokenManager:
@@ -492,6 +1155,12 @@ class LiveRuntime:
         with self._connection_lock:
             self._connection_active = False
 
+    @property
+    def connection_active(self) -> bool:
+        """Report capture contention without exposing or acquiring the Live connection slot."""
+        with self._connection_lock:
+            return self._connection_active
+
 
 def _origin_and_host_allowed(websocket: WebSocket) -> bool:
     """Validate Origin and Host for the WS handshake itself.
@@ -516,7 +1185,14 @@ async def _close_live_work(websocket: WebSocket) -> None:
     """Invalidate both result streams before concurrently draining their resources."""
     pump = getattr(websocket.state, "transcription_pump", None)
     generation = getattr(websocket.state, "generation", None)
+    # A pending assembly deadline must never emit after stop, error or disconnect.
+    settle = getattr(websocket.state, "assembly_settle", None)
     tasks = []
+    if settle is not None:
+        websocket.state.assembly_settle = None
+        if settle.task is not None:
+            settle.task.cancel()
+            tasks.append(settle.task)
     if pump is not None:
         pump.closed = True
         pump.task.cancel()
@@ -560,18 +1236,8 @@ def _transcript_too_large(text: str | None) -> bool:
     return bool(text and len(text) > MAX_TRANSCRIPT_CHARS)
 
 
-async def _emit_final(
-    websocket: WebSocket,
-    runtime: LiveRuntime,
-    store: KnowledgeStore,
-    result: FeedResult,
-    language: str,
-    dedupe: RecentFinalDedupe,
-    generation: LiveGeneration | None = None,
-) -> None:
-    text = (result.final or "").strip()
-    if not text:
-        return
+async def _send_final_transcript(websocket: WebSocket, result: FeedResult, text: str, language: str) -> None:
+    """Relay one provider final verbatim; assembly never edits transcript order."""
     await _send_live(websocket, {
         "type": "final",
         "text": text,
@@ -580,7 +1246,27 @@ async def _emit_final(
         **({"end_of_speech_latency_ms": result.end_of_speech_latency_ms}
            if result.end_of_speech_latency_ms is not None else {}),
     })
-    for question in detect_questions(text):
+
+
+async def _emit_questions(
+    websocket: WebSocket,
+    store: KnowledgeStore,
+    text: str,
+    result: FeedResult,
+    language: str,
+    dedupe: RecentFinalDedupe,
+    generation: LiveGeneration | None = None,
+    *,
+    split: bool = True,
+) -> None:
+    """Run the unchanged detector, dedupe, retrieval and generation path.
+
+    ``split`` is False only for one assembled compound behavioral request, where
+    the shared detector would cut its coordinated follow-up into a second
+    question. Dedupe, retrieval, provenance and generation are unchanged.
+    """
+    questions = detect_questions(text) if split else _single_question_candidate(text)
+    for question in questions:
         if dedupe.seen(question):
             continue
         if generation is not None:
@@ -604,6 +1290,21 @@ async def _emit_final(
         })
         if generation is not None and suggestion["status"] == "no_evidence":
             generation.submit(question)
+
+
+async def _emit_final(
+    websocket: WebSocket,
+    store: KnowledgeStore,
+    result: FeedResult,
+    language: str,
+    dedupe: RecentFinalDedupe,
+    generation: LiveGeneration | None = None,
+) -> None:
+    text = (result.final or "").strip()
+    if not text:
+        return
+    await _send_final_transcript(websocket, result, text, language)
+    await _emit_questions(websocket, store, text, result, language, dedupe, generation)
 
 
 async def _emit_stable_partial_exact(
@@ -749,6 +1450,16 @@ async def _run_transcription(websocket: WebSocket, runtime: LiveRuntime, store: 
     _diagnostic("recognizer.ready")
     dedupe = RecentFinalDedupe(clock=runtime.clock)
     stable_partial = StablePartialQuestion()
+    # Deepgram-only, connection-local: deepgram finalizes per endpoint, so a
+    # natural pause can split one question. Vosk/Whisper keep the unchanged path.
+    assembly = DeepgramQuestionAssembly(clock=runtime.clock) if grant.provider == "deepgram" else None
+    # Serializes candidate work so a settled delivery and a new final never
+    # interleave their dedupe, retrieval or send steps.
+    emit_lock = asyncio.Lock()
+    # Connection-local signal completed by a failed settled delivery. It joins the
+    # main receive wait set, so the failure is reported without waiting for new
+    # PCM or the idle timeout, and no exception payload is carried.
+    assembly_failure: asyncio.Future[None] = asyncio.get_running_loop().create_future()
     generation = LiveGeneration(websocket.app.state.generation, store, grant.session_id,
                                 language, websocket.send_json, websocket.state.send_lock)
     websocket.state.generation = generation
@@ -763,8 +1474,82 @@ async def _run_transcription(websocket: WebSocket, runtime: LiveRuntime, store: 
                 await _emit_stable_partial_exact(websocket, store, result.partial, language, stable_partial, dedupe)
         if result.final:
             stable_partial.reset()
-            await _emit_final(websocket, runtime, store, result, language, dedupe,
-                              generation if not stopping and result.utterance_complete else None)
+            if assembly is None:
+                await _emit_final(websocket, store, result, language, dedupe,
+                                  generation if not stopping and result.utterance_complete else None)
+                return
+            # A deadline that has not started delivering is obsolete; one that is
+            # already delivering is awaited below, never cancelled, so its
+            # retrieval, dedupe entry and suggestion are not lost.
+            _cancel_waiting_settle(websocket)
+            # Relay the provider final verbatim and in order first; a held
+            # fragment is discarded, never emitted as a question.
+            text = (result.final or "").strip()
+            if not text:
+                return
+            await _send_final_transcript(websocket, result, text, language)
+            async with emit_lock:
+                for candidate in assembly.observe(text):
+                    await _emit_questions(websocket, store, candidate.text, result, language, dedupe,
+                                          generation if not stopping and result.utterance_complete else None,
+                                          split=not candidate.compound)
+                remaining = None if stopping else assembly.settle_deadline()
+                if remaining is not None:
+                    _arm_settle(websocket, remaining, result)
+
+    def _cancel_waiting_settle(current: WebSocket) -> None:
+        """Retire only a deadline that has not started delivering its candidate."""
+        window = getattr(current.state, "assembly_settle", None)
+        if window is None or window.delivering:
+            return
+        current.state.assembly_settle = None
+        if window.task is not None:
+            window.task.cancel()
+
+    def _arm_settle(current: WebSocket, delay: float, result: FeedResult) -> None:
+        """Own exactly one connection-scoped deadline for the settled compound."""
+        _cancel_waiting_settle(current)
+        window = AssemblySettleWindow()
+        current.state.assembly_settle = window
+        window.task = asyncio.create_task(_deliver_settled(current, window, delay, result),
+                                          name="live.settle")
+
+    async def _deliver_settled(current: WebSocket, window: AssemblySettleWindow,
+                               delay: float, result: FeedResult) -> None:
+        """Emit the settled compound once, serialized with final processing."""
+        try:
+            await asyncio.sleep(delay)
+            if assembly is None or control.stop.is_set() or pump.stopping:
+                return
+            # From here the delivery is committed: a newer final waits for the
+            # emission lock instead of cancelling it.
+            window.delivering = True
+            async with emit_lock:
+                candidate = assembly.take_settled()
+                if candidate is None:
+                    return
+                await _emit_questions(current, store, candidate.text, result, language, dedupe,
+                                      generation if result.utterance_complete else None,
+                                      split=not candidate.compound)
+        except asyncio.CancelledError:
+            # Stop, error, disconnect or a superseded waiting deadline.
+            return
+        except Exception:
+            # The receive loop observes this signal and reports the bounded
+            # connection error; no exception payload or content is carried.
+            if not assembly_failure.done():
+                assembly_failure.set_result(None)
+        finally:
+            if getattr(current.state, "assembly_settle", None) is window:
+                current.state.assembly_settle = None
+
+    async def _drain_settle(current: WebSocket) -> None:
+        """Cancel and await the deadline so closing never races its delivery."""
+        window = getattr(current.state, "assembly_settle", None)
+        current.state.assembly_settle = None
+        if window is not None and window.task is not None:
+            window.task.cancel()
+            await asyncio.gather(window.task, return_exceptions=True)
 
     pump = (StreamingTranscriptionPump(cast(StreamingSpeechSession, speech), emit=emit) if grant.provider == "deepgram"
             else TranscriptionPump(speech, segmented=grant.provider == "faster-whisper", emit=emit))
@@ -790,7 +1575,7 @@ async def _run_transcription(websocket: WebSocket, runtime: LiveRuntime, store: 
             if remaining <= 0:
                 await _fail(websocket, "session_limit", "The Live session time limit was reached", 4408)
                 return
-            done, _ = await asyncio.wait({incoming, stopping, pump.task},
+            done, _ = await asyncio.wait({incoming, stopping, pump.task, assembly_failure},
                                          timeout=max(0, min(runtime.idle_timeout_seconds, remaining)),
                                          return_when=asyncio.FIRST_COMPLETED)
             if stopping in done:
@@ -799,6 +1584,16 @@ async def _run_transcription(websocket: WebSocket, runtime: LiveRuntime, store: 
             if pump.task in done:
                 await pump.task
                 return
+            if assembly_failure in done:
+                # Stop and disconnect keep priority when they arrive in the same
+                # wake-up: only an unrelated failure is reported here.
+                pending = incoming.result() if incoming in done else None
+                closing = pending is not None and (
+                    pending.get("type") == "websocket.disconnect"
+                    or _is_stop_control((pending.get("text") or "").strip()))
+                if not closing:
+                    await _fail(websocket, "internal_error", "The Live connection could not continue", 1011)
+                    return
             if not done:
                 if loop.time() >= deadline:
                     await _fail(websocket, "session_limit", "The Live session time limit was reached", 4408)
@@ -853,6 +1648,11 @@ async def _run_transcription(websocket: WebSocket, runtime: LiveRuntime, store: 
         incoming.cancel()
         stopping.cancel()
         await asyncio.gather(incoming, stopping, return_exceptions=True)
+        # Drain the deadline before the connection closes so no delivery survives
+        # it; a held fragment and its state never cross a connection.
+        await _drain_settle(websocket)
+        if assembly is not None:
+            assembly.reset()
 
 
 router = APIRouter()

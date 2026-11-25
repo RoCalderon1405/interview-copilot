@@ -103,7 +103,7 @@ def test_answer_from_rephrased_question(client):
     assert result['answer'] == 'Authentication verifies identity.'
 
 
-def test_spanish_labeled_excel_columns(client):
+def test_cross_language_excel_headers_are_rejected_without_importing_a_mispaired_answer(client):
     workbook = Workbook()
     ws = workbook.active
     ws.title = 'Entrevistas'
@@ -112,9 +112,77 @@ def test_spanish_labeled_excel_columns(client):
     stream = io.BytesIO()
     workbook.save(stream)
     result = upload(client, 'preguntas.xlsx', stream.getvalue())
-    assert result.status_code == 201
-    found = client.post('/answers', json={'question': '¿Qué significa JWT?'}).json()
-    assert found['answer'] == 'JWT stands for JSON Web Token.'
+    assert result.status_code == 422
+    assert 'matching language labels' in result.json()['detail']
+    assert client.get('/documents').json()['documents'] == []
+
+
+def bilingual_xlsx_file():
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = 'Entrevistas'
+    # Non-adjacent columns must be paired by declared language, not first Q/first A.
+    sheet.append(['Pregunta (ES)', 'Question (EN)', 'Respuesta (ES)', 'Answer (EN)'])
+    sheet.append(['¿Qué es autorización?', 'What is authorization?',
+                  'La autorización controla permisos.', 'Authorization controls permissions.'])
+    sheet.append(['¿Qué es un decorator?', 'What is a decorator?',
+                  'Un decorator puede comprobar autorización.', 'A decorator can check authorization.'])
+    sheet.append(['¿Qué es SQL?', 'What is SQL?', 'SQL permite consultar datos.', None])
+    stream = io.BytesIO()
+    workbook.save(stream)
+    return stream.getvalue()
+
+
+def test_bilingual_excel_import_preserves_all_complete_pairs_original_file_and_provenance(client):
+    from app.parsers import parse_file
+
+    payload = bilingual_xlsx_file()
+    entries = parse_file('bank.xlsx', payload)
+    assert [(entry.question, entry.answer, entry.language) for entry in entries[:2]] == [
+        ('¿Qué es autorización?', 'La autorización controla permisos.', 'es'),
+        ('What is authorization?', 'Authorization controls permissions.', 'en'),
+    ]
+    assert len(entries) == 5  # The empty English answer must not borrow Spanish wording.
+    assert entries[0].location == "Hoja 'Entrevistas' · fila 2 · columnas A/C · ES"
+    assert entries[1].location == "Hoja 'Entrevistas' · fila 2 · columnas B/D · EN"
+    imported = upload(client, 'bank.xlsx', payload)
+    assert imported.status_code == 201 and imported.json()['entry_count'] == 5
+    store = client.app.state.store
+    assert (store.files_dir / (imported.json()['id'] + '.xlsx')).read_bytes() == payload
+    assert upload(client, 'renamed.xlsx', payload).status_code == 409
+    with store.connection() as db:
+        assert [row[0] for row in db.execute('SELECT language FROM entries ORDER BY id')] == ['es', 'en', 'es', 'en', 'es']
+    status = client.get('/semantic/status').json()
+    assert status['questions'] == 5 and status['indexed'] == 0
+
+
+def test_bilingual_documentary_answers_follow_query_not_interface_and_refuse_missing_language(client):
+    from app.retrieval import suggest_live
+
+    legacy = upload(client, 'legacy.md', b'Q: What is authorization?\nA: La autorizacion controla permisos.')
+    assert legacy.status_code == 201
+    assert upload(client, 'bank.xlsx', bilingual_xlsx_file()).status_code == 201
+    for query, language, expected, match_type in [
+        ('What is authorization?', 'en', 'Authorization controls permissions.', 'exact_qa'),
+        ('que es autorización', 'es', 'La autorización controla permisos.', 'exact_qa'),
+        ('Could you explain authorization?', 'en', 'Authorization controls permissions.', 'similar_qa'),
+        ('Explica la autorización', 'es', 'La autorización controla permisos.', 'similar_qa'),
+    ]:
+        response = client.post('/answers', json={'question': query},
+                               headers={'Accept-Language': 'es' if language == 'en' else 'en'})
+        result = response.json()
+        assert result['answer'] == expected and result['match_type'] == match_type
+        assert result['source']['language'] == language
+        assert result['source']['document_name'] == 'bank.xlsx'
+        assert 'fila 2' in result['source']['location'] and language.upper() in result['source']['location']
+        if match_type == 'exact_qa':
+            assert suggest_live(client.app.state.store, query)['answer'] == expected
+    for query in ['What is SQL?', 'Could you explain SQL?', 'SQL']:
+        assert client.post('/answers', json={'question': query}).json()['status'] == 'no_evidence'
+        assert suggest_live(client.app.state.store, query)['status'] == 'no_evidence'
+    with client.app.state.store.connection() as db:
+        old = db.execute('SELECT answer,language FROM entries WHERE document_id=?', (legacy.json()['id'],)).fetchone()
+        assert old['answer'] == 'La autorizacion controla permisos.' and old['language'] is None
 
 
 def test_docx_qa_table(client):

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
@@ -17,7 +18,8 @@ from .bootstrap import create_deepgram_provider, create_generation_service, crea
 from .live import LiveRuntime, router as live_router
 from .parsers import SUPPORTED_EXTENSIONS, parse_file
 from .retrieval import assess_answer, suggest, build_session_report
-from .semantic import SemanticIndex, SemanticUnavailable
+from .semantic import SemanticIndex, SemanticInterrupted, SemanticUnavailable
+from .semantic_indexing import SemanticIndexing
 from .store import DuplicateDocumentError, KnowledgeStore
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
@@ -30,6 +32,8 @@ class AskRequest(BaseModel):
 class SemanticIndexRequest(BaseModel):
     # Only a direct request may authorize downloading an embedding model.
     allow_download: bool = False
+    document_id: str | None = Field(default=None, min_length=1, max_length=64)
+    background: bool = False
 
 
 class SessionRequest(BaseModel):
@@ -50,7 +54,21 @@ def default_data_dir() -> Path:
 
 
 def create_app(data_dir: Path | None = None) -> FastAPI:
-    application = FastAPI(title="Interview Copilot API", version="0.1.2")
+    @asynccontextmanager
+    async def lifespan(application: FastAPI):
+        await asyncio.to_thread(application.state.indexing.start)
+        try:
+            yield
+        finally:
+            closing = asyncio.create_task(asyncio.to_thread(application.state.indexing.close))
+            try:
+                await asyncio.shield(closing)
+            except asyncio.CancelledError:
+                # A cancelled lifespan must not abandon a native batch or its writer thread.
+                await closing
+                raise
+
+    application = FastAPI(title="Interview Copilot API", version="0.1.2", lifespan=lifespan)
     application.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
     allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
     application.add_middleware(
@@ -70,6 +88,9 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     store = KnowledgeStore(data_dir or default_data_dir())
     application.state.store = store
     application.state.semantic = SemanticIndex(store)
+    application.state.indexing = SemanticIndexing(application.state.semantic,
+        automatic_enabled=os.environ.get("COPILOT_AUTO_SEMANTIC_INDEX", "").strip().lower() in {"1", "true"},
+        defer_for_live=lambda: application.state.live.connection_active)
     application.state.live = LiveRuntime(whisper=create_whisper_provider(), deepgram=create_deepgram_provider())
     try:
         application.state.generation = create_generation_service()
@@ -92,12 +113,19 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         if len(payload) > MAX_UPLOAD_BYTES:
             raise HTTPException(status_code=413, detail="Maximum file size is 20 MB")
         try:
-            entries = parse_file(filename, payload)
-            return store.import_document(filename, payload, entries)
+            entries = await asyncio.to_thread(parse_file, filename, payload)
+            result = await asyncio.to_thread(store.import_document, filename, payload, entries)
         except DuplicateDocumentError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if application.state.indexing.automatic_enabled:
+            try:
+                await asyncio.to_thread(application.state.indexing.request, result["id"])
+            except Exception:
+                # Import is already committed. A scheduling failure must not masquerade as upload failure.
+                result["semantic_indexing_error"] = "scheduling_failed"
+        return result
 
     @application.get("/documents")
     def list_documents():
@@ -115,14 +143,29 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
 
     @application.get("/semantic/status")
     def semantic_status():
-        return application.state.semantic.status()
+        return application.state.indexing.status()
 
     @application.post("/semantic/index")
     def semantic_index(request: SemanticIndexRequest):
+        if request.document_id is not None and not store.semantic_documents(
+                application.state.semantic.model_name, request.document_id):
+            raise HTTPException(status_code=404, detail="Document not found")
+        if request.background and request.allow_download:
+            raise HTTPException(status_code=422, detail="Las descargas requieren una solicitud manual separada.")
         try:
-            return application.state.semantic.index(allow_download=request.allow_download)
+            if request.background:
+                documents = store.semantic_documents(application.state.semantic.model_name, request.document_id)
+                for document in documents:
+                    application.state.indexing.request(document["document_id"])
+                return application.state.indexing.status()
+            return application.state.semantic.index(allow_download=request.allow_download,
+                                                    document_id=request.document_id)
         except SemanticUnavailable as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except SemanticInterrupted as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail="No se pudo completar la indexación semántica. Puedes volver a intentarlo.") from exc
 
     @application.post("/sessions", status_code=201)
     def create_session(request: SessionRequest):

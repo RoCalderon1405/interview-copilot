@@ -4,8 +4,21 @@ from __future__ import annotations
 from difflib import SequenceMatcher
 
 from .application.ports import RetrievalReader
+from .domain.language import matches_question_language, question_language
 from .domain.text import STOPWORDS as STOPWORDS  # Preserve the public retrieval import.
 from .textnorm import normalize  # re-exported: retrieval.normalize stays importable
+
+
+# Local to manual Q&A matching: do not change FTS selection, Practice scoring or Live normalization.
+_QUESTION_BOILERPLATE = frozenset({
+    "explain", "describe", "define", "tell", "please", "actually", "about", "work", "works",
+    "explica", "explicame", "explicar", "dime", "puedes", "podrias", "favor", "funciona", "funcionan",
+})
+
+
+def _question_terms(text: str) -> list[str]:
+    """Keep normalized question-topic terms, excluding generic EN/ES request wording."""
+    return [term for term in normalize(text).split() if term not in STOPWORDS and term not in _QUESTION_BOILERPLATE]
 
 
 def overlap(left: str, right: str) -> float:
@@ -21,13 +34,26 @@ def _exact_qa(store: RetrievalReader, question: str) -> dict | None:
     row = store.find_exact_qa(question)
     if row is None:
         return None
+    # An unambiguous exact source question establishes its declared language even
+    # when heuristic request-word detection abstains. Storage resolves collisions.
+    labelled_exact = row.get("language") in {"es", "en"} and normalize(row.get("question", "")) == normalize(question)
+    if not labelled_exact and not matches_question_language(question, row.get("question", question), row.get("language")):
+        return None
     return {
         "status": "found",
         "answer": row["answer"],
-        "source": {"document_id": row["document_id"], "document_name": row["document_name"], "location": row["location"]},
+        "source": _document_source(row),
         "match_type": "exact_qa",
         "note": "Stored answer from your document",
     }
+
+
+def _document_source(row: dict) -> dict:
+    """Return original provenance; never infer a source-language label from UI or query text."""
+    source = {"document_id": row["document_id"], "document_name": row["document_name"], "location": row["location"]}
+    if row.get("language") is not None:
+        source["language"] = row["language"]
+    return source
 
 
 def suggest(store: RetrievalReader, question: str) -> dict:
@@ -37,7 +63,9 @@ def suggest(store: RetrievalReader, question: str) -> dict:
     FTS drops very short tokens (e.g. "AI") and the 20-candidate bound can
     crowd out an exact question, so detecting exactness only after retrieval
     would not guarantee exact-Q&A priority. Falls back to FTS candidates with
-    lexical scoring; never generates or invents answer text.
+    lexical scoring; similar Q&A require a shared question-topic term before
+    scoring. Answer-only FTS hits and boilerplate cannot establish relevance.
+    Never generates or invents answer text.
     """
     exact = _exact_qa(store, question)
     if exact:
@@ -47,22 +75,36 @@ def suggest(store: RetrievalReader, question: str) -> dict:
     if not entries:
         return {"status": "no_evidence", "answer": None, "source": None, "match_type": None}
 
-    def quality(row: dict) -> float:
-        target = row["question"] if row["kind"] == "qa" else row["body"]
-        similarity = SequenceMatcher(None, normalize(question), normalize(target[:500])).ratio()
-        coverage = overlap(question, target)
-        return 0.55 * coverage + 0.45 * similarity + (0.08 if row["kind"] == "qa" else 0)
+    query_terms = _question_terms(question)
+    query_topics = set(query_terms)
 
-    best = max(entries, key=quality)
-    score = quality(best)
-    if score < 0.3:
+    def quality(row: dict) -> float:
+        if row["kind"] == "qa":
+            if not matches_question_language(question, row["question"], row.get("language")):
+                return 0.0
+            target_terms = _question_terms(row["question"])
+            shared = query_topics & set(target_terms)
+            if not shared:
+                return 0.0
+            coverage = len(shared) / len(query_topics)
+            similarity = SequenceMatcher(None, " ".join(query_terms), " ".join(target_terms)[:500]).ratio()
+            return 0.55 * coverage + 0.45 * similarity + 0.08
+        # Fragments remain explicitly labeled excerpts, with their existing scoring.
+        similarity = SequenceMatcher(None, normalize(question), normalize(row["body"][:500])).ratio()
+        return 0.55 * overlap(question, row["body"]) + 0.45 * similarity
+
+    scored = [(quality(row), row) for row in entries]
+    eligible = [(score, row) for score, row in scored if score >= 0.3]
+    if not eligible:
         return {"status": "no_evidence", "answer": None, "source": None, "match_type": None}
+    language = question_language(question)
+    _, best = max(eligible, key=lambda item: (language is not None and item[1].get("language") == language, item[0]))
     is_qa = best["kind"] == "qa"
     # Exact matches already returned above; anything here is similar or an excerpt.
     return {
         "status": "found",
         "answer": best["answer"] if is_qa else best["body"],
-        "source": {"document_id": best["document_id"], "document_name": best["document_name"], "location": best["location"]},
+        "source": _document_source(best),
         "match_type": "similar_qa" if is_qa else "document_excerpt",
         "note": "Stored answer from your document" if is_qa else "Original document excerpt; not an AI-generated answer",
     }

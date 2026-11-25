@@ -80,6 +80,45 @@ def test_normalize_reexport_compatibility():
     assert retrieval_normalize("¿Qué es la API?") == normalize("¿Qué es la API?") == "que es la api"
 
 
+def test_manual_qa_rejects_answer_only_topic_despite_generic_question_similarity(tmp_path):
+    """An answer mentioning authorization does not make its decorator question relevant."""
+    store = KnowledgeStore(tmp_path)
+    store.import_document("decorator.md", b"synthetic decorator", [ParsedEntry(
+        "qa", "¿Qué es un decorator?", "Un decorator puede añadir comprobaciones de autorización.", "", "Line 1",
+    )])
+    query = "que es un autorización"
+    assert store.find_matches(query)[0]["question"] == "¿Qué es un decorator?"
+    assert suggest(store, query) == {
+        "status": "no_evidence", "answer": None, "source": None, "match_type": None,
+    }
+
+
+def test_manual_qa_accepts_related_question_topic_and_preserves_its_source(tmp_path):
+    store = KnowledgeStore(tmp_path)
+    answer = "La autorización comprueba los permisos para acceder a un recurso."
+    document = store.import_document("authorization.md", b"synthetic authorization", [ParsedEntry(
+        "qa", "¿Cómo funciona la autorización?", answer, "", "Line 7",
+    )])
+    result = suggest(store, "que es un autorización")
+    assert result["match_type"] == "similar_qa" and result["answer"] == answer
+    assert result["source"] == {
+        "document_id": document["id"], "document_name": "authorization.md", "location": "Line 7",
+    }
+
+
+def test_manual_qa_exact_normalization_still_precedes_topic_filter(tmp_path):
+    store = KnowledgeStore(tmp_path)
+    answer = "Un decorator puede añadir comprobaciones de autorización."
+    document = store.import_document("decorator.md", b"synthetic exact decorator", [ParsedEntry(
+        "qa", "¿Qué es un decorator?", answer, "", "Line 3",
+    )])
+    spy = SpyStore(store)
+    result = suggest(spy, "  QUE ES UN DECORATOR!!! ")
+    assert result["match_type"] == "exact_qa" and result["answer"] == answer
+    assert result["source"]["document_id"] == document["id"]
+    assert spy.find_matches_calls == 0
+
+
 def test_normalization_ignores_ordinary_punctuation():
     """Ordinary sentence punctuation stays insignificant (unchanged behavior)."""
     from app.textnorm import normalize

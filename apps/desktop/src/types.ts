@@ -1,5 +1,14 @@
 export type DocumentRecord = { id: string; name: string; extension: string; entry_count: number; imported_at: string };
-export type Source = { document_id?: string; document_name: string; location: string };
+export type SemanticDocument = {
+  document_id: string; name: string; questions: number; indexed: number; pending: number;
+  state: 'pending' | 'indexing' | 'completed' | 'failed'; requested: boolean;
+  error: 'model_unavailable' | 'indexing_failed' | 'interrupted' | null;
+};
+export type SemanticStatus = {
+  automatic_enabled: boolean; worker_active: boolean; deferred_for_live: boolean; model: string;
+  questions: number; indexed: number; pending: number; documents: SemanticDocument[];
+};
+export type Source = { document_id?: string; document_name: string; location: string; language?: 'en' | 'es' };
 export type AnswerResponse = { status: 'found' | 'no_evidence'; answer: string | null; source: Source | null; match_type: 'exact_qa' | 'similar_qa' | 'document_excerpt' | null; note?: string };
 export type Session = { id: string; mode: 'live' | 'practice' };
 export type PracticeQuestion = { id: number; question: string; document_name: string };

@@ -3,6 +3,14 @@
 .session-report h3{font-size:13px;margin:22px 0 12px}.review-list{display:grid;gap:10px}.review-item{padding:13px;border:1px solid #30415a;border-radius:10px;display:grid;gap:7px}.review-item strong{font-size:13px}.review-item span{font-size:11px;color:#9badc0}
 
 /* Live presentation stays scoped so Knowledge and Practice keep their layout. */
+.semantic-progress{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px;color:#c4d9ff}
+.doc-details .semantic-progress span{color:inherit;margin:0;font-size:12px;overflow-wrap:anywhere}
+.semantic-progress svg{flex-shrink:0}
+.semantic-progress[data-state=failed]{color:#ffc5c0}
+.semantic-progress[data-state=completed]{color:#a4e7c4}
+.semantic-error{color:#ffda96;font-size:13px;line-height:1.6;margin:8px 0 0;overflow-wrap:anywhere}
+.semantic-index-action{margin-top:8px;white-space:normal}
+.semantic-index-action:focus-visible{outline:2px solid #aab7ff;outline-offset:3px}
 .credential-settings{margin-top:24px}
 .credential-settings p{max-width:70ch;line-height:1.6;overflow-wrap:anywhere}
 .credential-settings [role=status]{margin-block:8px}
@@ -17,7 +25,9 @@
 .app-layout-live .brand-mark{width:34px;height:34px;border-radius:10px;box-shadow:none;background:#25314d}
 .app-layout-live .topbar{min-height:56px;height:auto;padding:8px 24px;border-color:var(--live-border)}
 .topbar-tools{display:flex;align-items:center;justify-content:flex-end;gap:16px;flex-wrap:wrap;min-width:0}
-.topbar{min-height:56px;height:auto;gap:12px;flex-wrap:wrap;padding-block:8px}
+.topbar{min-height:56px;height:auto;gap:12px;flex-wrap:wrap;padding-block:8px;position:sticky;top:0;z-index:3;background:#09111d}
+.app-layout-live .topbar{background:#0c111b}
+.main-area :is(button,input,select,textarea,summary,[tabindex]){scroll-margin-top:calc(var(--topbar-height,56px) + 12px)}
 .ui-language{display:flex;align-items:center;gap:8px;font-size:12px;color:#b4c2d5}
 .ui-language select{min-height:36px;max-width:100%;border:1px solid #546280;border-radius:6px;background:#121a27;color:#e8edf5;padding:6px 8px;font:inherit}
 .ui-language select:focus-visible{outline:2px solid #aab7ff;outline-offset:3px}
@@ -143,22 +153,24 @@ html.live-overlay,html.live-overlay body,html.live-overlay #root{background:tran
 .live-current h2{font-size:14px;margin:0;color:var(--live-text)}
 .live-current-feed{padding:20px;flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;overflow-anchor:auto;scrollbar-gutter:stable;scrollbar-color:#4b5c76 var(--live-surface)}
 .live-current-feed:focus-visible{outline:2px solid var(--live-accent);outline-offset:-3px}
+/* Keep long feed overflow inside its scrollport, not the page's sticky boundary. */
+.live-current-feed,.live-feed-scroll{contain:layout}
 .live-current-question{font-size:20px;font-weight:650;line-height:1.5;margin:0 0 16px;overflow-wrap:anywhere;white-space:pre-wrap;max-width:65ch}
 .live-privacy>summary{padding:12px 16px;color:var(--live-muted);font-size:13px;font-weight:600;cursor:pointer}
 .live-privacy{flex-shrink:0;border-top:1px solid var(--live-border)}
 .live-privacy>summary{padding-left:0}
 .app-layout-compact{--live-bg:rgba(12,17,27,var(--overlay-opacity,1));--live-surface:transparent;--live-raised:transparent;background:var(--live-bg)}
 .app-layout-compact>.sidebar{display:none}
-.app-layout-compact .topbar{padding:8px 12px;gap:8px;position:sticky;top:0;z-index:2;background:var(--live-bg)}
+.app-layout-compact .topbar{padding:8px 12px;gap:8px;background:#0c111b}
 .app-layout-compact .breadcrumb,.app-layout-compact .topbar .status{display:none}
 .app-layout-compact .overlay-brand{display:block;font-size:13px;font-weight:650;color:var(--live-text)}
 .app-layout-compact .content.content-live{padding:12px;max-width:none}
 .live-workspace-compact{gap:8px}
-.live-workspace-compact .live-header{grid-template-columns:minmax(0,1fr);grid-template-areas:'heading' 'window' 'capture';gap:8px;position:sticky;top:56px;z-index:1;background:#0c111b;padding-block:4px 8px}
+.live-workspace-compact .live-header{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-areas:'heading heading' 'window capture';gap:6px 8px;position:sticky;top:var(--topbar-height,56px);z-index:1;background:#0c111b;padding-block:4px 8px}
 .live-workspace-compact .live-window-controls,.live-workspace-compact .live-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .live-workspace-compact .btn{white-space:normal;padding:8px 10px}
 .live-workspace-compact .live-pin-copy{align-items:flex-start}
-.live-workspace-compact .live-results{grid-template-columns:minmax(0,1fr);grid-template-areas:'answers' 'transcript';grid-template-rows:minmax(0,3fr) minmax(140px,2fr);height:clamp(300px,calc(100dvh - 340px),600px);gap:8px;flex-shrink:0}
+.live-workspace-compact .live-results{grid-template-columns:minmax(0,38fr) minmax(0,62fr);grid-template-areas:'transcript answers';grid-template-rows:minmax(0,1fr);height:clamp(240px,calc(100dvh - 300px),560px);gap:8px;flex-shrink:0}
 .live-workspace-compact .live-results .live-transcript{height:100%}
 .live-workspace-compact .live-transcript-heading{padding:8px 12px}
 .live-workspace-compact .live-transcript>.live-feed-scroll{max-height:none;padding:12px}
@@ -171,4 +183,6 @@ html.live-overlay,html.live-overlay body,html.live-overlay #root{background:tran
 .live-workspace-compact .live-tools{flex-direction:column}
 .live-workspace-compact .live-tools>details{width:100%;flex:auto}
 @media(max-height:520px){.live-workspace-compact .live-header h1{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.live-workspace-compact .live-provider{flex-basis:auto}.live-workspace-compact .live-session-heading{gap:6px 12px}.live-workspace-compact .live-header{gap:6px}}
+/* At very short effective heights a second sticky band would hide most of the reading area. */
+@media(max-height:360px){.live-workspace-compact .live-header{position:static}}
 @media(max-height:520px){.live-workspace-compact .live-status-redundant{display:none}.live-workspace-compact .live-appearance>summary{padding:7px 12px}.live-workspace-compact .live-current .panel-title{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);padding:0;border:0}}

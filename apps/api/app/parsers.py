@@ -9,9 +9,12 @@ from pathlib import Path
 
 from docx import Document
 from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
 from pypdf import PdfReader
 
 from .domain.knowledge import ParsedEntry as ParsedEntry  # Preserve the public parser import.
+from .domain.language import Language
+from .textnorm import normalize
 
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".txt", ".md"}
 MAX_ARCHIVE_UNCOMPRESSED_BYTES = 80 * 1024 * 1024
@@ -43,6 +46,32 @@ def _header_role(value: str) -> str | None:
 
 def _clean(value: object) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()[:15_000]
+
+
+def _header_language(value: str) -> Language | None:
+    terms = set(normalize(value).split())
+    es = bool(terms & {"es", "espanol", "spanish"})
+    en = bool(terms & {"en", "ingles", "english"})
+    if es and en:
+        raise ValueError("XLSX Q&A headers must declare one language, not both EN and ES.")
+    return "es" if es else "en" if en else None
+
+
+def _xlsx_pairs(values: list[str]) -> list[tuple[int, int, Language | None]]:
+    """Pair each question with one answer of the same declared language, in column order."""
+    roles = [_header_role(value) for value in values]
+    questions = [(i, _header_language(values[i])) for i, role in enumerate(roles) if role == "question"]
+    answers = [(i, _header_language(values[i])) for i, role in enumerate(roles) if role == "answer"]
+    pairs = []
+    used: set[int] = set()
+    for qi, language in questions:
+        ai = next((i for i, answer_language in answers if i not in used and answer_language == language), None)
+        if ai is not None:
+            pairs.append((qi, ai, language))
+            used.add(ai)
+    if questions and answers and not pairs:
+        raise ValueError("XLSX Question/Answer columns must have matching language labels (or both be unlabelled).")
+    return pairs
 
 
 def _check_zip(payload: bytes) -> None:
@@ -98,24 +127,29 @@ def _parse_xlsx(payload: bytes) -> list[ParsedEntry]:
     entries: list[ParsedEntry] = []
     try:
         for sheet in workbook.worksheets[:MAX_SHEETS]:
-            header: tuple[int, int] | None = None
+            header: list[tuple[int, int, Language | None]] | None = None
             for row_no, row in enumerate(sheet.iter_rows(values_only=True, max_col=30, max_row=MAX_ROWS_PER_SHEET), 1):
                 values = [_clean(v) for v in row]
                 if not any(values):
                     continue
                 if header is None:
-                    roles = [_header_role(v) for v in values]
-                    q = next((i for i, v in enumerate(roles) if v == "question"), None)
-                    a = next((i for i, v in enumerate(roles) if v == "answer"), None)
-                    if q is not None and a is not None and q != a:
-                        header = (q, a)
+                    pairs = _xlsx_pairs(values)
+                    if pairs:
+                        header = pairs
                         continue
                 if header is not None:
-                    qi, ai = header
-                    question = values[qi] if qi < len(values) else ""
-                    answer = values[ai] if ai < len(values) else ""
-                    if question and answer:
-                        entries.append(ParsedEntry("qa", question, answer, "", f"Hoja '{sheet.title}' · fila {row_no}"))
+                    for qi, ai, language in header:
+                        question = values[qi] if qi < len(values) else ""
+                        answer = values[ai] if ai < len(values) else ""
+                        if question and answer:
+                            location = f"Hoja '{sheet.title}' · fila {row_no}"
+                            if language is not None or len(header) > 1:
+                                location += f" · columnas {get_column_letter(qi + 1)}/{get_column_letter(ai + 1)}"
+                            if language is not None:
+                                location += f" · {language.upper()}"
+                            entries.append(ParsedEntry("qa", question, answer, "", location, language))
+                            if len(entries) >= MAX_ITEMS:
+                                break
                 else:
                     entries.extend(_chunks(" | ".join(v for v in values if v), f"Hoja '{sheet.title}' · fila {row_no}"))
                 if len(entries) >= MAX_ITEMS:

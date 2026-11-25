@@ -2,6 +2,23 @@
 'use strict';
 (() => {
   const pairs = [
+    ['Indexación automática: sin confirmar','Automatic indexing: unconfirmed'],
+    ['Indexación automática: activada','Automatic indexing: enabled'],
+    ['Indexación automática: desactivada','Automatic indexing: disabled'],
+    ['Las nuevas importaciones Q&A se programan automáticamente. Los documentos anteriores siguen bajo control manual. Indexar y Reintentar no descargan modelos.','New Q&A imports are scheduled automatically. Older documents remain under manual control. Index and Retry do not download models.'],
+    ['Indexación en espera mientras Live está activo. Se reanudará al terminar la captura.','Indexing is waiting while Live is active. It will resume when capture finishes.'],
+    ['Solo se indexan preguntas Q&A sin embeddings. Importar conserva la búsqueda léxica aunque falle el índice semántico.','Only Q&A questions missing embeddings are indexed. Import preserves lexical search even if semantic indexing fails.'],
+    ['Activa COPILOT_AUTO_SEMANTIC_INDEX=1 en el backend y reinícialo para automatizar nuevas importaciones. Indexar y Reintentar no descargan modelos.','Set COPILOT_AUTO_SEMANTIC_INDEX=1 in the backend and restart it to automate new imports. Index and Retry do not download models.'],
+    ['No se pudo consultar la indexación. Los documentos y la búsqueda léxica siguen disponibles. Actualiza el estado.','Could not check indexing. Documents and lexical search remain available. Refresh status.'],
+    ['No se pudo confirmar la solicitud. Puede seguir en curso. Actualiza el estado antes de reintentar; no se autorizaron descargas.','The request could not be confirmed. It may still be running. Refresh status before retrying; no downloads were authorized.'],
+    ['Documento importado. No se pudo programar la indexación semántica; actualiza su estado y usa Indexar.','Document imported. Semantic indexing could not be scheduled; refresh its status and use Index.'],
+    ['Indexación pendiente','Indexing pending'], ['Indexando Q&A','Indexing Q&A'],
+    ['Indexación completada','Indexing completed'], ['Falló la indexación','Indexing failed'],
+    ['Sin Q&A para indexar','No Q&A to index'], ['Estado semántico sin confirmar','Semantic status unconfirmed'],
+    ['Indexar','Index'], ['Reintentar indexación','Retry indexing'],
+    ['Modelo o runtime local no disponible. Prepara el modelo con autorización explícita; después, reintenta. No se descargó ningún modelo.','Local model or runtime unavailable. Prepare the model with explicit authorization, then retry. No model was downloaded.'],
+    ['No se pudo completar la indexación. Los documentos y la búsqueda léxica siguen disponibles; reintenta solo lo pendiente.','Indexing could not be completed. Documents and lexical search remain available; retry only missing work.'],
+    ['Indexación interrumpida. Los embeddings guardados se conservan; reintenta para completar lo pendiente.','Indexing interrupted. Saved embeddings are preserved; retry to complete missing work.'],
     ['Autorización para tomar notas','Authorization to take notes'],
     ['Revisa la autorización y el consentimiento','Review authorization and consent'],
     ['Obtén autorización para tomar notas según las reglas de la entrevista. El consentimiento de audio de la aplicación no concede permisos de Windows ni autorización de los participantes.','Obtain authorization to take notes under the interview rules. In-app audio consent does not grant Windows permissions or participant authorization.'],
@@ -238,6 +255,7 @@
   const dictionaries = {en:new Map(), es:new Map()};
   for (const [es, en] of pairs) { dictionaries.en.set(es,en); dictionaries.es.set(en,es); }
   const templates = [
+    [/^(.+): (\d+) entradas importadas\.$/, '$1: $2 entries imported.'],
     [/^(.+): (\d+) entradas indexadas\.$/, '$1: $2 entries indexed.'],
     [/^Cobertura media de palabras clave en (\d+) respuestas$/, 'Average keyword coverage across $1 answer(s)'],
     [/^Comprobando (Vosk|Faster-Whisper|Deepgram Nova-3)…$/, 'Checking $1…'],
