@@ -3,10 +3,18 @@ from __future__ import annotations
 
 import asyncio
 import secrets
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Protocol
 
 from .application.generation import GeneratedSuggestion, GenerationError, GenerationLanguage, GenerationService
-from .store import KnowledgeStore
+
+
+class SessionReader(Protocol):
+    """Read one stored session without requiring the concrete knowledge store."""
+
+    def get_session(self, session_id: str) -> Mapping[str, object] | None:
+        """Return the session row with its mode and finish time, or None."""
+        ...
 
 
 class LiveGeneration:
@@ -17,7 +25,7 @@ class LiveGeneration:
     No question or answer is persisted or logged.
     """
 
-    def __init__(self, service: GenerationService, store: KnowledgeStore, session_id: str,
+    def __init__(self, service: GenerationService, store: SessionReader, session_id: str,
                  language: GenerationLanguage, send: Callable[[dict], Awaitable[None]],
                  send_lock: asyncio.Lock) -> None:
         self._service = service

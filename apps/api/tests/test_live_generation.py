@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
+import sys
 import threading
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -469,3 +472,22 @@ def test_completed_but_unsent_result_is_suppressed(ending, outcome):
         await worker.close()
 
     asyncio.run(scenario())
+
+
+def test_import_does_not_require_concrete_store():
+    script = """
+import importlib.abc
+import sys
+sys.path.insert(0, sys.argv[1])
+class RejectStore(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == 'app.store' or fullname.startswith('app.store.'):
+            raise AssertionError('Unexpected dependency: ' + fullname)
+sys.meta_path.insert(0, RejectStore())
+from app.live_generation import LiveGeneration
+assert LiveGeneration is not None
+"""
+    result = subprocess.run([sys.executable, "-I", "-B", "-c", script,
+                             str(Path(__file__).resolve().parents[1])],
+                            capture_output=True, text=True, timeout=15, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr

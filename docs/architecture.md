@@ -2,6 +2,8 @@
 
 Live Mode is the primary product. The integrated flow below is implemented for Windows development, but complete acceptance is pending. The owner validated the isolated Vosk/semantic lab and subsequently confirmed integrated Windows audio, English transcription, Electron-to-React relay, tested question detection and exact retrieval with sources. This does not establish integrated semantic, Spanish or conferencing acceptance. See [current acceptance status](live-mode.md).
 
+Unless a section is labelled **PLANNED**, the behavior described here exists in the working source. Planned items are owner-approved direction only: they are not implemented and do not authorize code, dependencies or live provider calls.
+
 <!-- STT-001B architecture addition, 2026-11-16 -->
 ## Deepgram Nova-3 streaming extension (STT-001B)
 
@@ -61,7 +63,7 @@ FastAPI localhost:8765
 - `application/generation.py`: independent `GenerationService`, typed `GenerationProvider` port, concise localized EN/ES instructions and three immutable synthetic style demonstrations per language (AI-001C), bounded deadline/input/output and immutable AI-generated provenance with no documentary source (AI-001A). Examples cover a technical concept, architecture/trade-off and a second-person behavioral answer structure without fabricated personal facts. Its small, standard-library content check rejects substantial fixed-instruction copying and narrowly recognized unsupported autobiographical work claims before attaching provenance. No HTTP/framework dependency or retrieval change.
 - `infrastructure/ollama.py`: local-only non-streaming chat HTTP adapter using runtime `httpx`; no proxies, redirects, retries, credentials, tools or model pulls. Builds fresh system → three selected-language user/assistant example pairs → current user question messages; no actual conversation history. Validates bounded completed assistant output; provider payloads are not exposed as error messages.
 - `bootstrap.py`: optional generation, Whisper and Deepgram provider composition, called by `main.py` without model loading/network I/O. Invalid optional generation configuration degrades to an unconfigured service with no provider, retaining the safe `not_configured` reason rather than conflating it with intentional disablement. Configuration and limits are documented in [setup](setup.md).
-- `live_generation.py`: connection-scoped generation coordinator, outside the PCM/Vosk loop (AI-001B). One active call and one replaceable latest pending question; revisions plus session/connection/question IDs suppress stale results. Replacement, stop, disconnect, error and HTTP session finish invalidate/cancel work. All WS event sends share a lock; generation failures preserve no-evidence and do not terminate capture. Request cancellation cannot guarantee instant termination of Ollama's internal inference.
+- `live_generation.py`: connection-scoped generation coordinator, outside the PCM/Vosk loop (AI-001B). One active call and one replaceable latest pending question; revisions plus session/connection/question IDs suppress stale results. Replacement, stop, disconnect, error and HTTP session finish invalidate/cancel work. All WS event sends share a lock; generation failures preserve no-evidence and do not terminate capture. Session lookups use a local structural `SessionReader`; the module does not import `KnowledgeStore`. Request cancellation cannot guarantee instant termination of Ollama's internal inference.
 
 AI-001D adds only the outbound `generation_failed` event: `session_id`, `question_id` and an allowlisted existing `GenerationError` code (`disabled`, `not_configured`, `invalid_input`, `unavailable`, `timeout`, `invalid_response`, `provider_error`). The coordinator now schedules disabled/unconfigured outcomes through the existing bounded worker; service checks return the reason before any provider invocation. Failed and successful outcomes share session-open, revision, close and send-lock guards. Cancellation is not converted into a failure, and failures while sending/disconnected do not trigger another send or log private exceptions. Existing generation prompts, model/timeout/output settings, safety validation and retry behavior are unchanged.
 
@@ -155,6 +157,34 @@ The main window calls `setContentProtection(true)` on Windows and exposes a Sett
 
 Exclusion while remaining visible locally is a core Live requirement. Teams, Zoom and Google Meet compatibility remains pending real Windows sessions, separately by client/browser version and capture mode. It does not guarantee undetectability, hide the process or replace audio consent. See [manual validation](live-mode.md#screen-sharing-exclusion--manual-acceptance-pending).
 
+## PLANNED — commercial desktop and independent cloud LLM
+
+The behavior above is current. This section records owner-approved direction only; no cloud LLM adapter, Settings provider lifecycle or cloud generation exists today.
+
+### Product boundary
+
+Interview Copilot is a **commercial Windows desktop application**, local-first and **not SaaS**. Each user installs it and controls their own RAG documents, SQLite database and knowledge base on their machine. Documents are not uploaded to a shared multi-tenant service, and no hosted knowledge store replaces local retrieval. Packaging, distribution and commercial licensing need separate approval and acceptance.
+
+### LLM provider independent of STT
+
+STT selection (Vosk default, Faster-Whisper, Deepgram) and LLM selection are separate decisions. Current generation remains local Ollama only. The planned selectable LLM reuses the existing `GenerationProvider` port and `GenerationService` contracts instead of adding a second generation architecture.
+
+- **DeepSeek** is the first planned cloud LLM provider, BYOK. It is a new adapter, not the Deepgram STT integration and not an OpenCode/agent integration.
+- **OpenAI** is deferred as a future provider. The earlier placeholder described AI-002 as OpenAI-only; AI-002 is now the umbrella task for planned cloud BYOK LLM support.
+- Nothing switches automatically in either direction: cloud STT does not select a cloud LLM, and a cloud LLM does not change STT.
+
+### Credentials scoped per provider
+
+Planned cloud credentials reuse the CLOUD-001 Windows Credential Manager adapter and native helper entry path, scoped to the provider: a separate fixed target, environment override and lock/guard per provider, with independent Configure/Replace/Delete and status. Keys remain outside the React renderer, IPC payloads, plaintext logs, SQLite and repository/installer content. The application never reads or imports OpenCode credentials; the user must supply a key explicitly. Existing Deepgram behavior is unchanged.
+
+### Retrieval, disclosure and cost
+
+RAG order stays RAG-first: exact Q&A with source → optional semantic Q&A labelled for review → no documentary evidence. A cloud LLM can only produce a separately enabled, unverified suggestion with no documentary source, never a silent fallback.
+
+Before any cloud LLM request, the user must select that provider explicitly and see a disclosure. Transmission is limited to the detected question, the necessary fixed instructions and the current fixed synthetic examples — not the full transcript, audio, documents or additional retrieved context. Do not assume that adding other data is acceptable. The disclosure states that content leaves the machine, names the provider and warns about possible provider charges. STT consent remains separate and unchanged; cloud use is not inferred from a stored key.
+
+Usage and cost display is planned as **estimated** from reported usage when available, not a provider bill; missing usage is shown as unknown. See [roadmap](roadmap.md#ai-002--planned-independent-cloud-llm-byok).
+
 ## Approved direction — incremental refactoring
 
 Progressively separate backend responsibilities into:
@@ -171,6 +201,6 @@ Dependencies point inward: domain imports no frameworks/adapters; application de
 
 For desktop, progressively separate `src/app`, `src/features/{live,knowledge,practice,settings}` and genuinely shared HTTP/bridge/UI modules. Electron should separate window lifecycle, permission/protection policies, IPC validation/handlers and preloads. Business coordination should not be embedded in JSX or platform handlers. Do not mechanically reproduce backend layers in React.
 
-Exact filenames and extraction order still need task-level approval. Prefer a few cohesive modules, hooks/reducers and concrete required ports over generic repositories, a DI framework, global state dependency or an interface for every class. Preserve the lab and existing Practice behavior; expanded Practice remains future work. The only current generation adapter is local Ollama, now optionally integrated with Live; real provider/Windows acceptance is pending.
+Exact filenames and extraction order still need task-level approval. Prefer a few cohesive modules, hooks/reducers and concrete required ports over generic repositories, a DI framework, global state dependency or an interface for every class. Preserve the lab and existing Practice behavior; expanded Practice remains future work. The only current generation adapter is local Ollama, optionally integrated with Live; no cloud LLM adapter exists. The [planned independent cloud LLM](#planned--commercial-desktop-and-independent-cloud-llm) is direction only, and real provider/Windows acceptance is pending.
 
 Validate main Live first, then extract one responsibility per task with contract/regression tests and Windows acceptance where audio, IPC, lifecycle or protection is affected. Separate behavior fixes from moves. See [roadmap](roadmap.md) and [engineering rules](../AGENTS.md).

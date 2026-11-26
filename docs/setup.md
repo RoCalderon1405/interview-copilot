@@ -122,6 +122,33 @@ Use `apps/api/reprocess_bilingual_xlsx.py`; there is no automatic reparse or HTT
 4. Apply uses one SQLite transaction. Existing entry IDs, question/answer/body text, FTS rows, valid unit-vector bytes and Practice references remain. Only source-location/language metadata is completed and missing entries/FTS rows are added. Unmatched or changed old entries abort rather than being removed. The original file and unrelated documents remain untouched. Only the affected document's obsolete semantic completion/error marker is reset; readiness then derives from its unchanged vectors. Backup/transaction failures leave no partial entry changes. Repeating a current preview/apply is a no-op, not another import.
 5. Restart the backend normally and refresh Knowledge Base. Expect **257/514 indexed Q&A**, with 257 pending EN questions, until explicitly indexed. Use **Index / Indexar on this document only**, or the existing scoped API with `document_id`, `background:true`, `allow_download:false`. RAG-002 reuses the same cached model and skips the existing ES vectors. The repair itself never loads a model, schedules indexing or authorizes downloads; no whole-KB indexing request is needed. After successful affected-document indexing, expect **514/514**. Check exact ES/EN source-backed answers with either interface locale; validate semantic paraphrases separately.
 
+#### Explicit reviewed one-row supplement (additive)
+
+`apps/api/supplement_bilingual_xlsx.py` prepares and applies one reviewed bilingual Q&A row as a separate document. It never edits or reimports the eight-sheet bank. Preparation is read-only for the active database. Keep the preparation directory private, outside the repository and data root: it contains a SQLite snapshot and source copies.
+
+1. Review the candidate workbook and record its SHA-256. From the repository root, use the **same actual database path** as the backend:
+
+   ```bat
+   set "BANK_DB=%LOCALAPPDATA%\InterviewCopilot\copilot.sqlite3"
+   set "BANK_DOCUMENT_ID=REPLACE_WITH_EXISTING_XLSX_ID"
+   set "CANDIDATE_SHA256=REPLACE_WITH_REVIEWED_64_HEX_SHA256"
+   set "SUPPLEMENT_DIR=%TEMP%\copilot-supplement-MSG-012"
+   .venv\Scripts\python.exe apps\api\supplement_bilingual_xlsx.py --database "%BANK_DB%" --document-id "%BANK_DOCUMENT_ID%" --candidate "REPLACE_WITH_CANDIDATE.xlsx" --candidate-sha256 "%CANDIDATE_SHA256%" --output-dir "%SUPPLEMENT_DIR%"
+   ```
+
+   `--candidate-sha256` is mandatory, and `--output-dir` must not already exist.
+2. Review the receipt: one new document, two entries/FTS rows, unchanged vectors, semantic state, sessions and Practice answers, plus the `preview_token`. Do not apply if counts or hashes differ. Repeating preparation is read-only and produces the same token.
+3. Stop capture and every backend process normally; do not kill active indexing. Confirm port 8765 is closed. Take a fresh verified SQLite backup and keep it private. Apply only with explicit approval, reusing the reviewed token:
+
+   ```bat
+   .venv\Scripts\python.exe apps\api\supplement_bilingual_xlsx.py --database "%BANK_DB%" --apply --prepared-dir "%SUPPLEMENT_DIR%" --reviewed-token REPLACE_WITH_TOKEN --backend-stopped
+   ```
+
+   Apply creates another verified backup plus the stored original, candidate, supplement and `apply.json` under `<prepared-dir>\apply-backups\<run>`. It refuses stale tokens, changed hashes, normalized collisions, a listening backend and incomplete artifacts. It never loads a model, schedules indexing, downloads files or changes existing rows.
+4. Do not rename or re-upload the bank and never run a full reimport. The supplemental row appears as its own document and stays semantically pending until explicitly indexed for that document only. Do not reindex the whole knowledge base.
+
+**Rollback.** Keep the apply backup until acceptance. With no later database work, stop the backend and restore the pre-apply SQLite snapshot; the added document, entries and FTS rows disappear. Remove the orphaned stored `<new_document_id>.xlsx` if present. If later sessions or imports exist, do **not** restore the whole snapshot: review with the owner and delete only the supplemental document through the existing Knowledge Base action, which cascades its entries, FTS, semantic status and linked Practice answers. No rollback requires a full reimport or reindex.
+
 ## Optional local semantic setup
 
 Skip this section if the existing cache/index works. Install `apps\api\requirements-semantic.txt` only when needed and approved. The configured model is `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`; only Q&A questions are embedded, with vectors stored in SQLite.

@@ -19,10 +19,23 @@
       "mode": "all",
       "model": "deepseek/deepseek-flash#high",
       "system": "Act as Interview Copilot's Developer. Follow AGENTS.md and the Director's approved task scope. Preserve unrelated work and existing data. Implement small changes and run focused checks with required command approvals. Report changed files, actual results, risks and pending manual validation to Director in Spanish. Do not install dependencies, download models, change architecture or product scope, stage, commit or push without explicit authorization. Do not launch other agents.",
-      "permissions": [
-        { "action": "shell", "resource": "*", "effect": "ask" },
-        { "action": "subagent", "resource": "*", "effect": "deny" }
-      ]
+     
+"permissions": [
+  { "action": "shell", "resource": "*", "effect": "ask" },
+
+  { "action": "shell", "resource": "git status *", "effect": "allow" },
+  { "action": "shell", "resource": "git diff *", "effect": "allow" },
+  { "action": "shell", "resource": "git log *", "effect": "allow" },
+  { "action": "shell", "resource": "python -m pytest *", "effect": "allow" },
+
+  { "action": "shell", "resource": "git add *", "effect": "ask" },
+  { "action": "shell", "resource": "git commit *", "effect": "ask" },
+  { "action": "shell", "resource": "git push *", "effect": "ask" },
+
+  { "action": "external_directory", "resource": "*", "effect": "ask" },
+  { "action": "subagent", "resource": "*", "effect": "deny" }
+]
+
     }
   }
 }

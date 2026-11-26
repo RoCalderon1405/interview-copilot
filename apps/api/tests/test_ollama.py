@@ -72,6 +72,28 @@ def test_each_call_has_only_fixed_examples_and_current_question():
     assert calls[0][1:-1] != calls[1][1:-1]
 
 
+@pytest.mark.parametrize("language,question,required", [
+    ("en-US", "Does our internal message service guarantee delivery order?",
+     ("conditions and scope", "guarantee", "qualify")),
+    ("es-MX", "¿Nuestro servicio interno de mensajes garantiza el orden de entrega?",
+     ("condiciones y el alcance", "garantía", "matiza")),
+])
+def test_guarantee_guidance_reaches_the_provider_request(language, question, required):
+    """Mocked transport shows the scope/qualification guidance is actually sent."""
+    payloads = []
+
+    def handler(request):
+        payloads.append(json.loads(request.content))
+        return httpx.Response(200, json=valid_response())
+
+    provider = OllamaProvider("local", transport=httpx.MockTransport(handler))
+    asyncio.run(provider.generate(question, language))
+    system, *rest = payloads[0]["messages"]
+    assert system["role"] == "system"
+    assert all(phrase in system["content"] for phrase in required)
+    assert rest[-1] == {"role": "user", "content": question}
+
+
 @pytest.mark.parametrize("model", ["", " ", "local model", "http://host/model", "../bad", "-bad",
     "local:cloud", "local-CLOUD", "x" * 201, None])
 def test_invalid_or_cloud_model_is_rejected(model):

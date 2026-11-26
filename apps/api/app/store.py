@@ -19,6 +19,43 @@ class DuplicateDocumentError(Exception):
     pass
 
 
+def insert_document(
+    db: sqlite3.Connection,
+    files_dir: Path,
+    name: str,
+    payload: bytes,
+    entries: list[ParsedEntry],
+) -> dict:
+    """Insert one document, its entries and FTS rows on an existing transaction.
+
+    The caller owns commit/rollback and must hold the offline single-writer
+    precondition for its own workflow. Rows are inserted only after the source
+    file is written; a row failure removes that file so the caller can roll back
+    without leaving a partial import behind. Cross-filesystem atomicity is not
+    claimed: a process crash between the file write and the transaction commit
+    can leave an orphan source file but never committed rows.
+    """
+    digest = hashlib.sha256(payload).hexdigest()
+    document_id = uuid.uuid4().hex
+    suffix = Path(name).suffix.lower()
+    target = files_dir / f"{document_id}{suffix}"
+    if db.execute("SELECT id FROM documents WHERE sha256=?", (digest,)).fetchone():
+        raise DuplicateDocumentError("This document was already imported.")
+    target.write_bytes(payload)
+    try:
+        db.execute("INSERT INTO documents(id,name,extension,sha256,entry_count) VALUES (?,?,?,?,?)",
+                   (document_id, name, suffix, digest, len(entries)))
+        for entry in entries:
+            cursor = db.execute("INSERT INTO entries(document_id,kind,question,answer,body,location,language) VALUES (?,?,?,?,?,?,?)",
+                                (document_id, entry.kind, entry.question, entry.answer, entry.body, entry.location, entry.language))
+            db.execute("INSERT INTO entry_fts(rowid,question,answer,body) VALUES (?,?,?,?)",
+                       (cursor.lastrowid, entry.question, entry.answer, entry.body))
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+    return {"id": document_id, "name": name, "extension": suffix, "entry_count": len(entries)}
+
+
 class KnowledgeStore:
     def __init__(self, data_dir: Path):
         self.data_dir = data_dir
@@ -93,25 +130,8 @@ class KnowledgeStore:
                 db.execute("ALTER TABLE entries ADD COLUMN language TEXT")
 
     def import_document(self, name: str, payload: bytes, entries: list[ParsedEntry]) -> dict:
-        digest = hashlib.sha256(payload).hexdigest()
-        document_id = uuid.uuid4().hex
-        suffix = Path(name).suffix.lower()
-        target = self.files_dir / f"{document_id}{suffix}"
         with self.connection() as db:
-            if db.execute("SELECT id FROM documents WHERE sha256=?", (digest,)).fetchone():
-                raise DuplicateDocumentError("This document was already imported.")
-            target.write_bytes(payload)
-            try:
-                db.execute("INSERT INTO documents(id,name,extension,sha256,entry_count) VALUES (?,?,?,?,?)", (document_id, name, suffix, digest, len(entries)))
-                for entry in entries:
-                    cursor = db.execute("INSERT INTO entries(document_id,kind,question,answer,body,location,language) VALUES (?,?,?,?,?,?,?)",
-                                        (document_id, entry.kind, entry.question, entry.answer, entry.body, entry.location, entry.language))
-                    db.execute("INSERT INTO entry_fts(rowid,question,answer,body) VALUES (?,?,?,?)",
-                               (cursor.lastrowid, entry.question, entry.answer, entry.body))
-            except Exception:
-                target.unlink(missing_ok=True)
-                raise
-        return {"id": document_id, "name": name, "extension": suffix, "entry_count": len(entries)}
+            return insert_document(db, self.files_dir, name, payload, entries)
 
     def list_documents(self) -> list[dict]:
         with self.connection() as db:

@@ -2,7 +2,9 @@
 
 ## Scope and authority
 - **Live Mode** is the primary product; preserve basic Practice Mode unless expansion is approved.
-- The owner controls product behavior, architecture, dependencies and scope. Explain trade-offs before material changes. Routine decisions inside an approved task need no repeated permission.
+- The product is a **commercial Windows desktop application**, local-first rather than SaaS. Each user controls their own RAG documents and knowledge base on their machine.
+- The owner and ChatGPT own product research and architecture decisions. Agents implement approved scope and may delegate or review; narrow technical inspection is allowed only to support that implementation. Do not run independent product research or expand scope.
+- Explain trade-offs before material changes. Routine decisions inside an approved task need no repeated permission.
 - Inspect Git branch and working tree first. Never overwrite unrelated work, delete user data, or stage, commit or push without authorization.
 - No new dependencies, services, models/downloads, custom agents, generators, Docker or vector DB services without approval.
 
@@ -27,9 +29,10 @@
 
 ## Security and product invariants
 - Windows system-audio capture includes **all Windows output**. Require informed consent and a real click **inside the isolated, nonpersistent capture window**. The main Electron renderer remains sandboxed without capture permissions.
-- Restrict IPC to validated, bounded events, never raw audio or credentials. Do not persist Live audio/transcripts or log private content. Keep cloud credentials server-side and out of repositories, renderer state and distributable archives.
+- Restrict IPC to validated, bounded events, never raw audio or credentials. Do not persist Live audio/transcripts or log private content. Keep cloud credentials server-side and outside the renderer, IPC, plaintext logs, SQLite, repositories and distributable archives.
+- The LLM provider is independent of STT: local Ollama today, DeepSeek as the first planned cloud BYOK provider, OpenAI deferred as future. Never auto-read or import OpenCode credentials.
 - Provider selection is explicit: Vosk stays the local default; optional local/cloud STT must not silently switch. Cloud STT requires separate informed audio consent.
-- Preserve Live retrieval order: normalized exact Q&A with source → optional semantic Q&A labeled for review → no documentary evidence. Opt-in AI suggestions remain separate, unverified and source-free. Do not implicitly change manual retrieval or indexing.
+- Preserve Live retrieval order: normalized exact Q&A with source → optional semantic Q&A labeled for review → no documentary evidence. Opt-in AI suggestions remain separate, unverified and source-free. Cloud LLM use requires explicit provider selection and disclosure before sending the detected question, necessary instructions and current fixed examples only — never the full transcript, audio or documents; no automatic cloud switch. Do not implicitly change manual retrieval or indexing.
 - Screen-sharing exclusion is **best effort**, never proof of invisibility. Capture is Windows development-only with restricted origins; packaged support needs separate approval and acceptance.
 - Preserve working databases, documents, cached models and embeddings; never reinstall or reindex solely for validation.
 
@@ -40,6 +43,11 @@
   - `cd apps/desktop && npm run test:electron && npm run test:ui && npm run test:audio && npm run lint:electron && npm run build`
 - Do not install missing dependencies without approval; report blocked checks, especially native Windows builds.
 - Report changed files, rationale, tests/results, risks and outstanding real-Windows checks. Never claim acceptance without evidence or disclose private transcripts.
+
+## Git workflow
+- After every implementation task, the Director must review the actual diff, the relevant test results and the working-tree status. Then the Director recommends all five items explicitly: readiness to commit, any boundary or timing concern, one exact English Conventional Commit message, which changed files belong to the commit, and blockers or changes to leave out.
+- Prefer small cohesive commits. Do not create commits for incomplete, mixed or unrelated work.
+- The Director and the Developer must never stage, commit, push or modify Git history without explicit owner authorization. A recommendation does not grant that authorization.
 
 ## Documentation ownership
 - `README.md`: overview/setup; `docs/architecture.md`: boundaries and design; `docs/roadmap.md`: single task board; `docs/live-mode.md`: acceptance evidence; `docs/technical-vocabulary.md`: keyterm profiles.
