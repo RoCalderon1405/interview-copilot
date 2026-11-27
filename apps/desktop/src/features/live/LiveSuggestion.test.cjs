@@ -530,6 +530,15 @@ test('generated answers show unverified AI provenance, not documentary attributi
   assert.match(html,/No verificada/);
   assert.doesNotMatch(html,/Respuesta exacta|Fuente:|<script>/);
   assert.match(html,/&lt;script&gt;/);
+  const cloudHtml=renderState(restoreLiveState([documentary,{...generated,provider:'deepseek',model:'deepseek-flash'}],[]));
+  assert.match(cloudHtml,/deepseek · deepseek-flash · Sin respaldo documental/);
+  assert.match(cloudHtml,/Sugerencia generada por IA — revisar/);
+  try {
+    language='en';
+    const cloudEnglish=renderState(restoreLiveState([documentary,{...generated,provider:'deepseek',model:'deepseek-flash'}],[]));
+    assert.match(cloudEnglish,/deepseek · deepseek-flash · No documentary support/);
+    assert.match(cloudEnglish,/AI-generated suggestion — review/);
+  } finally {language='es';}
 });
 test('exact and semantic answers retain source-backed labels',()=>{
   for(const match_type of ['exact_qa','semantic_qa']) {

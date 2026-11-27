@@ -62,6 +62,35 @@
         <label class="capture-consent"><input type="checkbox" id="consent" aria-describedby="consent-status"> <span id="consent-description">Autorizo capturar todo el audio de salida de Windows y procesarlo localmente.</span></label>
       </div>
     </div>
+    <section class="capture-llm" id="llm-controls" aria-labelledby="llm-title" hidden>
+      <div class="capture-llm-heading">
+        <h2 id="llm-title">Generación de IA</h2>
+        <p>Selección independiente del motor de transcripción.</p>
+      </div>
+      <div class="capture-fields capture-llm-fields">
+        <label for="llm-provider">Proveedor de IA
+          <select id="llm-provider">
+            <option value="ollama" selected>Ollama local (configuración del backend)</option>
+            <option value="deepseek">DeepSeek (nube, de pago)</option>
+          </select>
+        </label>
+        <label for="llm-model" id="llm-model-label" hidden>Modelo de DeepSeek
+          <select id="llm-model" disabled>
+            <option value="deepseek-flash" selected>deepseek-flash</option>
+            <option value="deepseek-v4-pro">deepseek-v4-pro</option>
+          </select>
+        </label>
+      </div>
+      <p id="llm-status" class="muted" role="status" aria-live="polite">Ollama local usa la habilitación y el modelo configurados en el backend. Las sugerencias siguen sin verificación.</p>
+      <div id="llm-consent-notice" class="availability-notice" data-severity="warning" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m12 3 10 18H2L12 3Zm0 5v5m0 4h.01"/></svg>
+        <div><strong>Consentimiento para la pregunta en la nube</strong>
+          <p id="llm-disclosure">DeepSeek recibe solo la pregunta detectada, las instrucciones fijas y los ejemplos fijos actuales. No recibe la transcripción completa, los documentos ni el audio. Puede generar cargos. Este consentimiento es distinto del consentimiento de audio y se reinicia en cada inicio.</p>
+          <p id="llm-consent-status" role="status" aria-atomic="true">Falta el consentimiento para enviar la pregunta a DeepSeek.</p>
+          <label class="capture-consent"><input type="checkbox" id="llm-consent" aria-describedby="llm-consent-status llm-disclosure"> <span id="llm-consent-description">Autorizo enviar la pregunta detectada a DeepSeek en esta sesión.</span></label>
+        </div>
+      </div>
+    </section>
     <section class="capture-actions" aria-label="Controles de captura">
       <div class="controls"><button id="start" disabled>Iniciar transcripción</button><button id="stop" disabled>Detener</button><button id="hide-controls" hidden>Ocultar controles sin detener</button></div>
       <div id="capture-status-notice" class="availability-notice" data-severity="information" role="status" aria-live="polite" aria-atomic="true">

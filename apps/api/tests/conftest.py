@@ -8,6 +8,8 @@ from app.infrastructure import windows_credentials as credentials
 def isolated_credentials(monkeypatch, tmp_path):
     monkeypatch.delenv(credentials.KEY_ENV, raising=False)
     monkeypatch.delenv(credentials.DEEPSEEK_KEY_ENV, raising=False)
+    # The cloud LLM developer gate is opt-in and must never leak from the host.
+    monkeypatch.delenv("COPILOT_ALLOW_CLOUD_LLM", raising=False)
     monkeypatch.setattr(credentials, "credential_gate_path", lambda *_: tmp_path / "credential.lock")
     monkeypatch.setattr(credentials, "mutation_gate_path", lambda: tmp_path / "mutation.lock")
     # The helper imports these names directly, so patch its local references too.

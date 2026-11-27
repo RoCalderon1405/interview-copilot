@@ -360,6 +360,15 @@ test('generated event is allowlisted, bounded and cannot carry documentary prove
   assert.deepEqual(JSON.parse(JSON.stringify(accepted)),generated());
   assert.equal(accepted.source,null);
   assert.equal(h.window.webContents.sent.at(-1).data.type,'generated_suggestion');
+  for(const model of ['deepseek-chat','deepseek-reasoner','DEEPSEEK-FLASH','deepseek-flash:cloud',null]) {
+    publish(e(c),{...generated(),provider:'deepseek',model});
+  }
+  assert.equal(invoke(h,'live-state').events.length,initial+1);
+  const cloud={...generated(),provider:'deepseek',model:'deepseek-flash'};
+  publish(e(c),cloud);
+  const cloudAccepted=invoke(h,'live-state').events.at(-1);
+  assert.deepEqual(JSON.parse(JSON.stringify(cloudAccepted)),cloud);
+  assert.equal(cloudAccepted.source,null);
   for(let i=0;i<100;i++) publish(e(c),generated());
   assert.equal(invoke(h,'live-state').events.length,80);
 });

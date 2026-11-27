@@ -21,6 +21,12 @@
 .capture-page:has(#provider option[value="deepgram"]:checked) .capture-profile{display:flex}
 .capture-page .capture-consent{flex-direction:row;align-items:flex-start;gap:10px;margin:12px 0 0;font-size:13px;font-weight:400;line-height:1.5;color:inherit}
 .capture-consent input{accent-color:#aab7ff;width:18px;height:18px;flex-shrink:0;margin:1px 0 0}
+.capture-page [hidden]{display:none!important}
+.capture-page .capture-llm{margin-top:16px;padding-top:14px;border-top:1px solid #2b384b}
+.capture-llm-heading h2{font-size:14px;line-height:1.4;margin:0;color:#e8edf5}
+.capture-llm-heading p{margin:4px 0 0;font-size:12px}
+.capture-page .capture-llm-fields{margin-top:10px}
+.capture-page .capture-llm .availability-notice{margin-top:12px}
 .capture-actions{position:sticky;top:0;z-index:1;background:#0c111b;padding:8px 0}
 .capture-page .controls{gap:8px;flex-wrap:wrap}
 .capture-page button{min-height:42px;font:inherit;font-size:13px;font-weight:600;border:1px solid #8999ee;border-radius:8px;background:#4d5cbb;padding:10px 16px}

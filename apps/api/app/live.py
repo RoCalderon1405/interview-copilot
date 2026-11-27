@@ -27,13 +27,22 @@ from typing import Callable, Literal, cast
 
 import anyio
 from fastapi import APIRouter, HTTPException, Request, WebSocket
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StrictBool
 
+from .application.generation import GenerationError, GenerationService
 from .application.stt import (FeedResult, SpeechUnavailable, SpeechFailure, SpeechOverloaded,
                               SpeechProvider, ProfiledSpeechProvider, SpeechSession, TranscriptionControl, TranscriptionPump,
                                StreamingSpeechSession, StreamingTranscriptionPump)
+from .infrastructure.deepseek import DEEPSEEK_MODELS
 from .infrastructure.vosk import VoskModelCache, MODEL_DIRECTORIES, default_models_root, _final_result
-from .bootstrap import create_deepgram_provider, create_whisper_provider
+from .bootstrap import (
+    cloud_llm_enabled,
+    create_deepgram_provider,
+    create_deepseek_generation_service,
+    create_whisper_provider,
+    deepseek_availability,
+    windows_cloud_llm_supported,
+)
 from .retrieval import suggest_live
 from .live_generation import LiveGeneration
 from .store import KnowledgeStore
@@ -232,6 +241,10 @@ class LiveGrant:
     expires_at: float
     provider: str = "vosk"
     vocabulary_profile: str = "general"
+    # The LLM choice is independent of STT and immutable for this connection.
+    llm_provider: str = "ollama"
+    llm_model: str | None = None
+    llm_consent: bool = False
 
 
 def _detect_partial_questions(text: str, limit: int = MAX_QUESTION_CANDIDATES) -> list[str]:
@@ -1100,7 +1113,8 @@ class LiveTokenManager:
         self._lock = threading.Lock()
 
     def issue(self, session_id: str, language: str, provider: str = "vosk",
-              vocabulary_profile: str = "general") -> str:
+              vocabulary_profile: str = "general", llm_provider: str = "ollama",
+              llm_model: str | None = None, llm_consent: bool = False) -> str:
         with self._lock:
             now = self.clock()
             self._prune(now)
@@ -1109,7 +1123,10 @@ class LiveTokenManager:
             if len(self._tokens) >= self.capacity:
                 self._tokens.pop(next(iter(self._tokens)))
             token = secrets.token_urlsafe(32)
-            self._tokens[token] = LiveGrant(session_id, language, now + self.ttl_seconds, provider, vocabulary_profile)
+            self._tokens[token] = LiveGrant(
+                session_id, language, now + self.ttl_seconds, provider, vocabulary_profile,
+                llm_provider, llm_model, llm_consent,
+            )
             return token
 
     def consume(self, token: str) -> LiveGrant | None:
@@ -1340,6 +1357,26 @@ async def _emit_stable_partial_exact(
     })
 
 
+def _connection_generation_service(websocket: WebSocket, grant: LiveGrant) -> GenerationService:
+    """Snapshot the grant-selected LLM for this connection without fallback.
+
+    Local Ollama keeps the existing application-owned service and environment
+    semantics. DeepSeek is built from the local key at connection start; a
+    missing/invalid key yields an unconfigured service so documentary retrieval
+    remains usable and generation reports ``not_configured`` without a call.
+    """
+    if grant.llm_provider == "ollama":
+        service = getattr(websocket.app.state, "generation", None)
+        return service if service is not None else GenerationService(enabled=True)
+    if (grant.llm_provider == "deepseek" and grant.llm_consent
+            and isinstance(grant.llm_model, str) and grant.llm_model in DEEPSEEK_MODELS):
+        try:
+            return create_deepseek_generation_service(grant.llm_model)
+        except GenerationError:
+            return GenerationService(enabled=True)
+    return GenerationService(enabled=True)
+
+
 async def _open_speech(websocket: WebSocket, runtime: LiveRuntime, grant: LiveGrant,
                        control: TranscriptionControl) -> SpeechSession | None:
     """Watch stop/disconnect during native startup, not just after model loading."""
@@ -1422,6 +1459,23 @@ async def _run_transcription(websocket: WebSocket, runtime: LiveRuntime, store: 
     if "provider" in payload and payload["provider"] != grant.provider:
         await _fail(websocket, "provider_mismatch", "The token is bound to a different provider")
         return
+    # The LLM grant is immutable for this connection. Cloud use additionally
+    # requires explicit consent and one adapter-approved model, even if a token
+    # was created outside the HTTP route.
+    if grant.llm_provider not in {"ollama", "deepseek"}:
+        await _fail(websocket, "unsupported_llm_provider", "Unsupported language model provider")
+        return
+    if grant.llm_provider == "deepseek" and (
+            not grant.llm_consent or not isinstance(grant.llm_model, str)
+            or grant.llm_model not in DEEPSEEK_MODELS):
+        await _fail(websocket, "invalid_llm_selection", "Cloud generation requires explicit consent and a supported model")
+        return
+    if "llm_provider" in payload and payload["llm_provider"] != grant.llm_provider:
+        await _fail(websocket, "llm_provider_mismatch", "The token is bound to a different language model provider")
+        return
+    if "llm_model" in payload and payload["llm_model"] != grant.llm_model:
+        await _fail(websocket, "llm_model_mismatch", "The token is bound to a different language model")
+        return
     control = TranscriptionControl()
     websocket.state.transcription_control = control
     websocket.state.session_id = grant.session_id
@@ -1460,7 +1514,8 @@ async def _run_transcription(websocket: WebSocket, runtime: LiveRuntime, store: 
     # main receive wait set, so the failure is reported without waiting for new
     # PCM or the idle timeout, and no exception payload is carried.
     assembly_failure: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-    generation = LiveGeneration(websocket.app.state.generation, store, grant.session_id,
+    generation_service = _connection_generation_service(websocket, grant)
+    generation = LiveGeneration(generation_service, store, grant.session_id,
                                 language, websocket.send_json, websocket.state.send_lock)
     websocket.state.generation = generation
     runtime.generations[grant.session_id] = generation
@@ -1559,6 +1614,8 @@ async def _run_transcription(websocket: WebSocket, runtime: LiveRuntime, store: 
         "session_id": grant.session_id,
         "language": language,
         "provider": grant.provider,
+        "llm_provider": grant.llm_provider,
+        "llm_model": grant.llm_model,
         "sample_rate": SAMPLE_RATE,
         "sample_format": "pcm_s16le",
         "channels": 1,
@@ -1664,15 +1721,31 @@ class LiveTokenRequest(BaseModel):
     vocabulary_profile: VocabularyProfile = "general"
     # Consent is an explicit opt-in; a missing or false value is rejected by validation.
     consent: Literal[True]
+    # LLM selection is independent of STT and defaults to the existing local service.
+    llm_provider: Literal["ollama", "deepseek"] = "ollama"
+    llm_model: str | None = Field(default=None, max_length=200)
+    # Separate from STT consent. Strict JSON boolean: strings/numbers are
+    # rejected instead of being coerced. Omitted/false remains the Ollama legacy path.
+    llm_consent: StrictBool = False
 
 
 @router.get("/live/status")
 def live_status(request: Request):
     runtime: LiveRuntime = request.app.state.live
     vosk = runtime.models.availability()
+    generation = getattr(request.app.state, "generation", None)
+    ollama_available = bool(getattr(generation, "available", False))
     return {**vosk, "default_provider": "vosk",
             "providers": {"vosk": vosk, "faster-whisper": runtime.whisper.availability(),
-                           "deepgram": runtime.deepgram.availability()}}
+                           "deepgram": runtime.deepgram.availability()},
+            "llm": {
+                "default_provider": "ollama",
+                "providers": {
+                    "ollama": {"provider": "ollama", "available": ollama_available,
+                               "selection": "backend"},
+                    "deepseek": deepseek_availability(),
+                },
+            }}
 
 
 @router.post("/sessions/{session_id}/live-token")
@@ -1685,6 +1758,24 @@ def create_live_token(session_id: str, request: LiveTokenRequest, http_request: 
         raise HTTPException(status_code=400, detail="Not a live session")
     if session["finished_at"]:
         raise HTTPException(status_code=409, detail="Session already finished")
+    llm_model = request.llm_model or None
+    if request.llm_provider == "deepseek":
+        # Explicit cloud consent is distinct from audio consent and is enforced
+        # here, before any token can authorize a detected question.
+        if not request.llm_consent:
+            raise HTTPException(status_code=400, detail="Cloud question consent is required for the selected language model.")
+        if llm_model not in DEEPSEEK_MODELS:
+            raise HTTPException(status_code=400, detail="Select one supported DeepSeek model; no implicit model is used.")
+        if not windows_cloud_llm_supported():
+            raise HTTPException(status_code=503, detail="Cloud language models are available only in the Windows development flow.")
+        if not cloud_llm_enabled():
+            raise HTTPException(status_code=503, detail=(
+                "Cloud language models are disabled by the backend developer gate. "
+                "Set COPILOT_ALLOW_CLOUD_LLM=true for the backend and restart; "
+                "explicit per-session selection and consent are still required."
+            ))
+    elif llm_model is not None:
+        raise HTTPException(status_code=400, detail="The local Ollama model is fixed by backend configuration.")
     runtime: LiveRuntime = http_request.app.state.live
     provider = ({"vosk": runtime.models, "faster-whisper": runtime.whisper,
                  "deepgram": runtime.deepgram})[request.provider]
@@ -1693,12 +1784,20 @@ def create_live_token(session_id: str, request: LiveTokenRequest, http_request: 
         raise HTTPException(status_code=503, detail=f"Selected provider ({request.provider}) is unavailable for {request.language}. "
                             "Check the selected runtime/model or cloud API Key; no automatic fallback.")
     profile = request.vocabulary_profile if request.provider == "deepgram" else "general"
-    token = runtime.tokens.issue(session_id, request.language, request.provider, profile)
+    # A missing or invalid DeepSeek key does not fall back to Ollama. The token
+    # can still start documentary-only capture; connection setup yields an
+    # unconfigured generation service and no remote request.
+    token = runtime.tokens.issue(
+        session_id, request.language, request.provider, profile,
+        request.llm_provider, llm_model, request.llm_consent,
+    )
     return {
         "token": token,
         "session_id": session_id,
         "language": request.language,
         "provider": request.provider,
+        "llm_provider": request.llm_provider,
+        "llm_model": llm_model,
         "expires_in_seconds": int(TOKEN_TTL_SECONDS),
     }
 

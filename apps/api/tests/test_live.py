@@ -588,6 +588,41 @@ def test_live_status_reports_availability_without_paths(client):
     assert "C:" not in text and "\\\\" not in text
 
 
+def test_deepseek_status_fails_closed_off_windows_without_reading_credentials():
+    from app.bootstrap import deepseek_availability
+
+    status = deepseek_availability({}, windows=False)
+    assert status["available"] is False
+    assert status["configured"] is False
+    assert status["configuration_error"] == "windows_required"
+    assert status["gate_enabled"] is False
+    assert status["models"] == ["deepseek-flash", "deepseek-v4-pro"]
+
+
+def test_live_status_reports_sanitized_deepseek_readiness_without_network(client, monkeypatch):
+    import httpx
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("LLM status must not create a network client")
+
+    monkeypatch.setattr(httpx, "AsyncClient", forbidden)
+    monkeypatch.setenv("COPILOT_DEEPSEEK_API_KEY", "sk-test-0123456789abcdef")
+    monkeypatch.setenv("COPILOT_ALLOW_CLOUD_LLM", "true")
+    monkeypatch.delenv("COPILOT_LLM_TIMEOUT_SECONDS", raising=False)
+    response = client.get("/live/status")
+    assert response.status_code == 200
+    llm = response.json()["llm"]
+    assert llm["default_provider"] == "ollama"
+    assert llm["providers"]["deepseek"]["configured"] is True
+    assert llm["providers"]["deepseek"]["available"] is True
+    assert llm["providers"]["deepseek"]["gate_enabled"] is True
+    assert llm["providers"]["deepseek"]["credential_source"] == "environment"
+    assert llm["providers"]["deepseek"]["models"] == ["deepseek-flash", "deepseek-v4-pro"]
+    text = response.text
+    assert "sk-test-0123456789abcdef" not in text
+    assert "C:" not in text and "\\\\" not in text
+
+
 def test_status_explains_missing_models_without_paths(tmp_path, monkeypatch):
     cache = VoskModelCache(models_root=tmp_path / "missing-models")
     result = cache.availability()
@@ -624,6 +659,102 @@ def test_live_token_requires_live_unfinished_session_and_consent(client):
     assert client.post(
         f"/sessions/{live}/live-token", json={"language": "en-US", "consent": True}
     ).status_code == 409
+
+
+def test_cloud_llm_token_requires_explicit_consent_exact_model_and_windows_flow(client, monkeypatch):
+    client.app.state.live.models = FakeModelCache()
+    monkeypatch.setenv("COPILOT_ALLOW_CLOUD_LLM", "true")
+    live = client.post("/sessions", json={"mode": "live"}).json()["id"]
+    endpoint = f"/sessions/{live}/live-token"
+    base = {"language": "en-US", "consent": True, "llm_provider": "deepseek",
+            "llm_model": "deepseek-flash"}
+    assert client.post(endpoint, json={**base, "llm_consent": False}).status_code == 400
+    assert client.post(endpoint, json={**base, "llm_consent": True, "llm_model": None}).status_code == 400
+    assert client.post(endpoint, json={**base, "llm_consent": True,
+                                       "llm_model": "deepseek-chat"}).status_code == 400
+    assert client.post(endpoint, json={**base, "llm_provider": "openai",
+                                       "llm_consent": True}).status_code == 422
+
+    response = client.post(endpoint, json={**base, "llm_consent": True})
+    assert response.status_code == 200
+    assert (response.json()["llm_provider"], response.json()["llm_model"]) == (
+        "deepseek", "deepseek-flash")
+    grant = client.app.state.live.tokens.consume(response.json()["token"])
+    assert (grant.llm_provider, grant.llm_model, grant.llm_consent) == (
+        "deepseek", "deepseek-flash", True)
+
+    default = client.post(endpoint, json={"language": "en-US", "consent": True})
+    assert default.status_code == 200
+    assert (default.json()["llm_provider"], default.json()["llm_model"]) == ("ollama", None)
+    assert client.post(endpoint, json={"language": "en-US", "consent": True,
+                                       "llm_model": "backend-override"}).status_code == 400
+
+    monkeypatch.setattr("app.live.windows_cloud_llm_supported", lambda: False)
+    assert client.post(endpoint, json={**base, "llm_consent": True}).status_code == 503
+
+
+def test_cloud_llm_consent_is_strict_json_boolean(client, monkeypatch):
+    client.app.state.live.models = FakeModelCache()
+    monkeypatch.setenv("COPILOT_ALLOW_CLOUD_LLM", "true")
+    live = client.post("/sessions", json={"mode": "live"}).json()["id"]
+    endpoint = f"/sessions/{live}/live-token"
+    cloud = {"language": "en-US", "consent": True, "llm_provider": "deepseek",
+             "llm_model": "deepseek-flash"}
+    for coercive in ("yes", "true", 1, None):
+        assert client.post(endpoint, json={**cloud, "llm_consent": coercive}).status_code == 422
+    assert client.post(endpoint, json={**cloud, "llm_consent": True}).status_code == 200
+
+    # Omitted/false remains the legacy local Ollama path; coercive values are still rejected.
+    assert client.post(endpoint, json={"language": "en-US", "consent": True}).status_code == 200
+    assert client.post(endpoint, json={"language": "en-US", "consent": True,
+                                       "llm_consent": False}).status_code == 200
+    assert client.post(endpoint, json={"language": "en-US", "consent": True,
+                                       "llm_consent": 1}).status_code == 422
+
+
+def test_cloud_llm_gate_defaults_off_and_requires_explicit_opt_in(client, monkeypatch):
+    from app.application.generation import GenerationError
+    from app.bootstrap import cloud_llm_enabled, create_deepseek_generation_service
+
+    client.app.state.live.models = FakeModelCache()
+    monkeypatch.setenv("COPILOT_DEEPSEEK_API_KEY", "sk-test-0123456789abcdef")
+    monkeypatch.delenv("COPILOT_LLM_TIMEOUT_SECONDS", raising=False)
+    live = client.post("/sessions", json={"mode": "live"}).json()["id"]
+    endpoint = f"/sessions/{live}/live-token"
+    request = {"language": "en-US", "consent": True, "llm_provider": "deepseek",
+               "llm_model": "deepseek-flash", "llm_consent": True}
+
+    assert cloud_llm_enabled({}) is False
+    for disabled in ("false", "0", "yes", ""):
+        assert cloud_llm_enabled({"COPILOT_ALLOW_CLOUD_LLM": disabled}) is False
+    status = client.get("/live/status").json()["llm"]["providers"]["deepseek"]
+    assert (status["gate_enabled"], status["available"], status["configured"]) == (
+        False, False, True)
+    assert status["configuration_error"] == "cloud_llm_disabled"
+    assert client.post(endpoint, json=request).status_code == 503
+    with pytest.raises(GenerationError):
+        create_deepseek_generation_service("deepseek-flash")
+
+    monkeypatch.setenv("COPILOT_ALLOW_CLOUD_LLM", "1")
+    assert cloud_llm_enabled() is True
+    status = client.get("/live/status").json()["llm"]["providers"]["deepseek"]
+    assert (status["gate_enabled"], status["available"], status["configured"]) == (
+        True, True, True)
+    assert status["configuration_error"] is None
+    assert client.post(endpoint, json=request).status_code == 200
+    service = create_deepseek_generation_service("deepseek-flash")
+    assert service.available is True
+
+
+def test_deepseek_status_respects_invalid_local_generation_deadline(client, monkeypatch):
+    client.app.state.live.models = FakeModelCache()
+    monkeypatch.setenv("COPILOT_DEEPSEEK_API_KEY", "sk-test-0123456789abcdef")
+    monkeypatch.setenv("COPILOT_ALLOW_CLOUD_LLM", "true")
+    monkeypatch.setenv("COPILOT_LLM_TIMEOUT_SECONDS", "invalid")
+    status = client.get("/live/status").json()["llm"]["providers"]["deepseek"]
+    assert status["configured"] is True
+    assert status["available"] is False
+    assert status["configuration_error"] == "invalid_generation_timeout"
 
 
 # --- WebSocket handshake and transport --------------------------------------

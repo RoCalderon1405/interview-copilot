@@ -187,13 +187,15 @@ function safeLiveEvent(raw) {
   }
   if (raw.type === 'generated_suggestion') {
     const bounded = (value, max) => typeof value === 'string' && value.trim().length > 0 && value.length <= max;
-    if (raw.kind !== 'ai_generated' || raw.source !== null || raw.provider !== 'ollama' ||
+    const providerOk = raw.provider === 'ollama' ||
+      (raw.provider === 'deepseek' && ['deepseek-flash','deepseek-v4-pro'].includes(raw.model));
+    if (raw.kind !== 'ai_generated' || raw.source !== null || !providerOk ||
         raw.match_type != null || raw.status != null || !['en-US','es-MX'].includes(raw.language) ||
         !bounded(raw.question,3000) || !bounded(raw.answer,2000) || !bounded(raw.model,200) ||
         !bounded(raw.session_id,80) || !/^[a-zA-Z0-9-]+$/.test(raw.session_id) ||
         !bounded(raw.question_id,160) || !raw.question_id.startsWith(raw.session_id + ':') ||
         !/^[a-zA-Z0-9:-]+$/.test(raw.question_id)) return null;
-    return {type:'generated_suggestion',kind:'ai_generated',source:null,provider:'ollama',
+    return {type:'generated_suggestion',kind:'ai_generated',source:null,provider:raw.provider,
       model:raw.model,session_id:raw.session_id,question_id:raw.question_id,
       question:raw.question,language:raw.language,answer:raw.answer};
   }

@@ -187,7 +187,7 @@ export function LiveWorkspace({showError, windowState, windowBusy = false, onMod
         {view.suggestions.length > 0 ? view.suggestions.map(item => <LiveSuggestion key={item.id}
           item={item.event} generated={item.generated} failure={item.generationFailure} generationState={item.generationState}/>)
           : <div className="live-feed-empty"><CircleHelp size={24} aria-hidden="true"/><h3>{t('Esperando una pregunta completa…')}</h3>
-          <p>{t('Las preguntas completas activan la búsqueda en tus documentos. Si no hay evidencia, Ollama solo puede sugerir si está habilitado.')}</p></div>}
+          <p>{t('Las preguntas completas activan la búsqueda en tus documentos. Si no hay evidencia, el proveedor de IA seleccionado puede sugerir solo si está habilitado y autorizado.')}</p></div>}
       </div>
     </section>
 
@@ -210,7 +210,7 @@ export function LiveWorkspace({showError, windowState, windowBusy = false, onMod
     </div>
 
     <div className="live-tools">
-    <details className="panel live-manual"><summary>{t('Consulta manual')} <span>{t('Documentos, sin Ollama')}</span></summary>
+    <details className="panel live-manual"><summary>{t('Consulta manual')} <span>{t('Documentos, sin IA')}</span></summary>
       <form onSubmit={event => {event.preventDefault(); void search();}}>
         <label className="field-label" htmlFor="live-question">{t('Pregunta')}</label>
         <div className="live-manual-row"><textarea id="live-question" rows={2} maxLength={3000} value={question}

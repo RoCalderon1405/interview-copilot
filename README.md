@@ -15,8 +15,8 @@ Interview Copilot is a desktop application for technical interview preparation a
 ## Implemented features
 
 - **Focused Live workspace:** expanded transcript and Q&A panels, a compact overlay and stable question cards enriched by correlated results; EN/ES interface controls.
-- **Evidence-first answers:** normalized exact Q&A with sources, optional semantic Q&A labeled for review, then an explicit no-evidence result. Opt-in Ollama suggestions remain unverified and source-free.
-- **Explicit STT selection:** local Vosk by default, optional local Faster-Whisper or Deepgram Nova-3 cloud streaming; no automatic provider switching.
+- **Evidence-first answers:** normalized exact Q&A with sources, optional semantic Q&A labeled for review, then an explicit no-evidence result. Opt-in local Ollama or explicitly selected DeepSeek suggestions remain unverified and source-free.
+- **Explicit provider selection:** local Vosk by default, optional local Faster-Whisper or Deepgram Nova-3 cloud streaming; LLM choice is independent, with local Ollama by default and per-session DeepSeek only after separate consent. No automatic provider switching.
 - **Local Knowledge Base:** import XLSX, DOCX, PDF, TXT and Markdown; manage documents and search manually without invoking an LLM.
 - **Basic Practice:** document questions, keyword-based feedback and session reports—not an AI assessment of technical correctness.
 
@@ -41,7 +41,7 @@ The same Q&A queue in a narrower, answer-first layout; the transcript stays open
 - **Desktop:** Electron 39, React 19, TypeScript, Vite and Lucide icons. The main renderer is sandboxed; audio capture uses an isolated window.
 - **Backend and storage:** Python, FastAPI, Uvicorn and SQLite/FTS5. Documents and indexes stay local; no vector database service is required.
 - **Speech:** Vosk is the local default. Faster-Whisper (local CPU INT8) and Deepgram Nova-3 (cloud) are optional.
-- **Retrieval and generation:** optional FastEmbed semantic Q&A and opt-in local Ollama suggestions, disabled by default. Models and optional runtimes require separate setup; nothing switches providers automatically.
+- **Retrieval and generation:** optional FastEmbed semantic Q&A and opt-in unverified generation. Local Ollama remains the default and keeps its backend settings; DeepSeek is selectable only for a new Live session after an explicit backend gate, exact model choice and separate cloud-question consent. Models and optional runtimes require separate setup; nothing switches providers automatically.
 
 ## Architecture
 
@@ -55,7 +55,7 @@ flowchart LR
     API --> Store["Local documents and SQLite / FTS5"]
     API --> Local["Local STT - Vosk or optional Faster-Whisper"]
     API -.->|"Optional cloud STT - separate consent"| Cloud["Deepgram Nova-3"]
-    API -.->|"Opt-in unverified suggestions"| LLM["Local Ollama"]
+    API -.->|"Opt-in unverified suggestions"| LLM["Local Ollama or explicit per-session DeepSeek"]
 ```
 
 The backend owns provider access and credentials. React receives bounded Live events, never raw audio or keys. See [architecture and security boundaries](docs/architecture.md) for module responsibilities and lifecycle details.
@@ -98,7 +98,7 @@ The API listens at `http://127.0.0.1:8765`; Vite uses `http://127.0.0.1:5173`. I
 - **Screen sharing:** main-window exclusion is **best effort**, never proof of invisibility. The auxiliary audio window is not protected; Teams, Zoom and Google Meet exclusion remains unverified.
 - **Accuracy and acceptance:** STT and question detection can miss or combine speech. Full Spanish, latency, stop/restart, overlay and capture-continuity acceptance is pending. AI can invent claims; **AI-001C quality is not accepted**. Review all suggestions. Scanned-PDF OCR is not implemented; see [document-format limits](docs/setup.md#documents-and-retrieval).
 
-**CLOUD-001:** Windows development key management is implemented; owner Windows acceptance is pending. **AI-002 Stage 2** adds separate local DeepSeek key management only; provider selection and cloud generation remain planned. Priorities belong in the [roadmap](docs/roadmap.md); actual acceptance evidence belongs in [Live Mode validation](docs/live-mode.md).
+**CLOUD-001:** Windows development key management is implemented; owner Windows acceptance is pending. **AI-002 Stages 1–2** add the isolated DeepSeek adapter and separate local key management. **Stage 3A** adds explicit per-session DeepSeek selection, disclosure and connection binding behind an explicit backend developer gate (`COPILOT_ALLOW_CLOUD_LLM`, off by default); no real cloud calls, usage/cost telemetry or packaged support were added. Priorities belong in the [roadmap](docs/roadmap.md); actual acceptance evidence belongs in [Live Mode validation](docs/live-mode.md).
 
 ## Documentation
 

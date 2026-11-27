@@ -65,9 +65,10 @@ class Provider:
             raise
 
 
-def session(client, language="en-US"):
+def session(client, language="en-US", **llm):
     sid = client.post('/sessions', json={"mode": "live"}).json()['id']
-    token = client.post(f'/sessions/{sid}/live-token', json={"consent": True, "language": language}).json()['token']
+    token = client.post(f'/sessions/{sid}/live-token',
+                        json={"consent": True, "language": language, **llm}).json()['token']
     return sid, token
 
 
@@ -271,6 +272,87 @@ def test_invalid_configuration_does_not_prevent_startup(tmp_path, monkeypatch):
             assert ws.receive_json() == dict(type='generation_failed', code='not_configured',
                 session_id=sid, question_id=documentary['question_id'])
             stop(ws)
+
+
+@pytest.mark.parametrize('key,configuration_error', [
+    (None, None),
+    ('short', 'invalid_environment'),
+])
+def test_selected_deepseek_without_valid_key_keeps_documentary_and_never_calls_network(
+        tmp_path, monkeypatch, key, configuration_error):
+    import httpx
+    if key is None:
+        monkeypatch.delenv('COPILOT_DEEPSEEK_API_KEY', raising=False)
+    else:
+        monkeypatch.setenv('COPILOT_DEEPSEEK_API_KEY', key)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('Missing/invalid DeepSeek configuration must not create a network client')
+
+    monkeypatch.setattr(httpx, 'AsyncClient', forbidden)
+    monkeypatch.setenv('COPILOT_ALLOW_CLOUD_LLM', 'true')
+    app = create_app(tmp_path)
+    app.state.store.import_document('synthetic.md', b'synthetic',
+        [ParsedEntry('qa', 'What is caching?', 'Stored answer.', '', 'Line 1')])
+    app.state.live.models = Models(FeedResult(final='What is caching?'), FeedResult(final='Explain queues?'))
+    with TestClient(app) as client:
+        status = client.get('/live/status').json()['llm']['providers']['deepseek']
+        assert status['configured'] is False
+        assert status['configuration_error'] == configuration_error
+        sid, token = session(client, llm_provider='deepseek', llm_model='deepseek-flash',
+                             llm_consent=True)
+        with start(client) as ws:
+            ws.send_json({'type': 'start', 'token': token})
+            ready = ws.receive_json()
+            assert (ready['llm_provider'], ready['llm_model']) == ('deepseek', 'deepseek-flash')
+            exact = receive_final(ws)
+            assert (exact['status'], exact['match_type']) == ('found', 'exact_qa')
+            unknown = receive_final(ws)
+            assert unknown['status'] == 'no_evidence'
+            assert ws.receive_json() == dict(type='generation_failed', code='not_configured',
+                session_id=sid, question_id=unknown['question_id'])
+            stop(ws)
+
+
+def test_deepseek_selection_is_grant_bound_per_connection_and_never_falls_back(tmp_path, monkeypatch):
+    monkeypatch.setenv('COPILOT_ALLOW_CLOUD_LLM', 'true')
+    app = create_app(tmp_path)
+    local = Provider()
+    app.state.generation = GenerationService(local, enabled=True)
+    created = []
+
+    class DeepSeekSynthetic(Provider):
+        name = 'deepseek'
+
+        def __init__(self, model):
+            super().__init__()
+            self.model = model
+
+    def factory(model, *args, **kwargs):
+        created.append(model)
+        return GenerationService(DeepSeekSynthetic(model), enabled=True)
+
+    monkeypatch.setattr('app.live.create_deepseek_generation_service', factory)
+    app.state.live.models = Models(FeedResult(final='Explain caching?'), FeedResult(final='Explain queues?'))
+    with TestClient(app) as client:
+        for model in ('deepseek-flash', 'deepseek-v4-pro'):
+            sid, token = session(client, llm_provider='deepseek', llm_model=model,
+                                 llm_consent=True)
+            with start(client) as ws:
+                ws.send_json({'type': 'start', 'token': token})
+                ready = ws.receive_json()
+                assert (ready['llm_provider'], ready['llm_model']) == ('deepseek', model)
+                documentary = receive_final(ws)
+                assert documentary['status'] == 'no_evidence'
+                event = ws.receive_json()
+                assert event == dict(type='generated_suggestion', kind='ai_generated',
+                    session_id=sid, question_id=documentary['question_id'],
+                    question=documentary['question'], language='en-US',
+                    answer='A synthetic practical answer.', provider='deepseek',
+                    model=model, source=None)
+                stop(ws)
+    assert created == ['deepseek-flash', 'deepseek-v4-pro']
+    assert local.calls == []
 
 
 def test_worker_replaces_pending_and_discards_cancellation_resistant_result():

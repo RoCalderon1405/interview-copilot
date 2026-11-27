@@ -13,12 +13,12 @@ const GENERATION_STATES: Record<LiveGenerationState, string> = {
 
 const FAILURE_REASONS: Record<GenerationFailureCode, string> = {
   disabled:'Generación de IA desactivada en el backend.',
-  not_configured:'Configuración de IA incompleta o inválida. Revisa el modelo y las variables del backend.',
+  not_configured:'Configuración de IA incompleta o inválida. Revisa el modelo, la clave del proveedor seleccionado o las variables del backend.',
   invalid_input:'La pregunta no cumple los límites de generación de IA.',
-  unavailable:'Ollama no está disponible. Revisa el servicio y el modelo local.',
+  unavailable:'El proveedor de IA no está disponible. Revisa el servicio local, el modelo configurado o la conexión de red.',
   timeout:'Se agotó el tiempo de generación de IA.',
   invalid_response:'La respuesta de IA se descartó por validación de formato o seguridad.',
-  provider_error:'Ollama no pudo completar la generación. Revisa el servicio y el modelo configurado.',
+  provider_error:'El proveedor de IA no pudo completar la generación. Revisa el servicio, el modelo o la configuración del proveedor seleccionado.',
 };
 
 /** One question card; documentary and unverified AI provenance remain distinct within it. */

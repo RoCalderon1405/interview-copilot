@@ -82,7 +82,28 @@ Windows storage is not a vault against malware running as the same user or an ad
 
 AI-002 Stage 2 adds a separate **Settings → DeepSeek API Key (cloud)** section in Windows development Electron. Configure, Replace and Delete use the same empty native credential dialog and confirmation rules as Deepgram. The key is stored under the fixed `InterviewCopilot/DeepSeek` target; it never passes through React, IPC payloads, logs, SQLite or helper arguments. Accepted keys are 16–200 letters, digits, `.`, `_` or `-`.
 
-This stage only manages local presence. It does not compose the DeepSeek adapter, select the provider, verify authentication or billing, enable cloud generation or send questions. The Deepgram and DeepSeek keys are independent; no OpenCode credential is read. `COPILOT_DEEPSEEK_API_KEY` is reserved for the planned backend composition and is not read by any running request yet. Packaged management is disabled. A stored key alone is not consent to transmit questions. See [Stage 2 evidence and limits](live-mode.md#ai-002-stage-2--deepseek-local-key-management).
+Stage 2 only manages local presence. It does not verify authentication or billing, select the provider or send questions. The Deepgram and DeepSeek keys are independent; no OpenCode credential is read. Packaged management is disabled. A stored key alone is not consent to transmit questions. See [Stage 2 evidence and limits](live-mode.md#ai-002-stage-2--deepseek-local-key-management).
+
+### Optional DeepSeek selection (AI-002 Stage 3A)
+
+AI-002 Stage 3A adds an **AI generation** section to the isolated capture controls in Windows development Electron. It is independent of the STT provider. **Local Ollama remains the default** and keeps the existing `COPILOT_LLM_ENABLED`, `COPILOT_OLLAMA_MODEL` and `COPILOT_LLM_TIMEOUT_SECONDS` behavior. The standalone browser lab does not expose this section.
+
+**Backend developer gate:** cloud LLM selection is **off by default**. To allow it, set the backend process environment variable `COPILOT_ALLOW_CLOUD_LLM=true` (or `1`) and restart the backend. Only `true` and `1` enable it; a missing value and every other value leave it off. The application never sets this flag during installation or startup. The flag alone sends nothing and does not call any provider: the user must still select DeepSeek, choose an exact model and give separate per-session consent. If the gate is off, the capture controls disable Start for DeepSeek and offer local Ollama instead; `/live/status` reports the gate separately from OS support.
+
+To select DeepSeek for a new session:
+
+1. Open the capture controls from Live.
+2. Select **DeepSeek (cloud, paid)** and one exact model: `deepseek-flash` or `deepseek-v4-pro`.
+3. Read the disclosure and select the **separate** cloud-question consent checkbox. The existing audio/STT consent remains separate.
+4. Start transcription. The consent resets after every start and when the LLM provider or model changes.
+
+The token request rejects a missing or non-boolean cloud-question consent, an unsupported model, a non-Windows flow or a disabled backend gate. `llm_consent` is a strict JSON boolean; strings such as `"yes"` and numbers such as `1` are rejected. Omitting it or sending `false` remains the legacy local-Ollama path. The single-use Live grant binds the selected provider/model and consent. No key is stored in the grant, IPC, renderer, SQLite or logs. The DeepSeek adapter is built for that connection only; there is no global active provider and no automatic fallback.
+
+DeepSeek receives only the detected question, the fixed instructions and the current fixed examples for the selected language. It does not receive the full transcript, audio, documents or additional retrieved context. Requests may incur DeepSeek charges. The app does not perform a remote key/status check; a locally configured key may still lack access or balance.
+
+The backend resolves `COPILOT_DEEPSEEK_API_KEY` first, then Windows Credential Manager, at each new connection. An invalid environment override fails closed and does not fall back to Windows. If the key is missing or invalid, no remote request is made: documentary exact/semantic search still works, and an eligible no-evidence question shows the existing `not_configured` failure. Select Ollama and restart capture to use local generation again; the app never switches automatically. `/live/status` reports only local readiness categories and never the key. It also marks an invalid `COPILOT_LLM_TIMEOUT_SECONDS` as `invalid_generation_timeout` and does not report the provider as available; the same bounded timeout is used by the connection service.
+
+Selection, disclosure and connection binding are implemented. Real provider calls, usage/cost telemetry, billing integration, packaged support and Windows acceptance remain pending or out of scope. The local API does not authenticate arbitrary local processes; development origin/host checks are not user authentication. See [Stage 3A evidence](live-mode.md#ai-002-stage-3a--explicit-per-session-deepseek-selection).
 
 ## Documents and retrieval
 
@@ -93,7 +114,7 @@ Imports support XLSX, DOCX, PDF, TXT and Markdown up to 20 MB:
 - TXT/Markdown recognizes `Q:`/`A:`, `Question:`/`Answer:` or `Pregunta:`/`Respuesta:` blocks. Other content becomes fragments; surrounding prose is not separately indexed when Q&A blocks exist.
 - PDF produces fragments. Encrypted PDFs are rejected, and scanned PDFs need OCR that is not implemented.
 
-Automatic Live uses normalized exact Q&A → optional semantic Q&A → explicit no-evidence. It does not use document fragments as automatic answers. Only then may explicitly enabled Ollama provide a separate unverified suggestion. Manual `POST /answers` uses exact Q&A followed by FTS5/lexical candidates, including excerpts; Practice retains its existing lexical assessment.
+Automatic Live uses normalized exact Q&A → optional semantic Q&A → explicit no-evidence. It does not use document fragments as automatic answers. Only then may an explicitly enabled local Ollama or explicitly selected cloud LLM provide a separate unverified suggestion. Manual `POST /answers` uses exact Q&A followed by FTS5/lexical candidates, including excerpts; Practice retains its existing lexical assessment.
 
 Extraction normalizes whitespace and limits fields. Sources identify stored content, not verified truth or guaranteed original formatting. Imports update entries/FTS immediately; optional automatic semantic indexing runs separately, as described below. Deletion removes linked entries, vectors, indexing status and Practice answers. There is no in-place document update API. Do not reindex solely to validate unrelated changes.
 
@@ -191,6 +212,8 @@ Generation is **disabled by default**, used only after an eligible completed Liv
 - `COPILOT_LLM_ENABLED`: `true`/`1` enables generation; `false`/`0` disables it.
 - `COPILOT_OLLAMA_MODEL`: required explicit identifier of an approved, already-installed local model. No default model, pull or cloud fallback.
 - `COPILOT_LLM_TIMEOUT_SECONDS`: total service deadline, default 8 seconds, greater than 0 and at most 60. No retries; cold loading can exceed the deadline.
+
+These variables configure the default local Ollama service only. DeepSeek is an explicit per-session choice with its own Stage 2 key and Stage 3A consent; selecting it does not change these local settings. The same bounded timeout applies to a selected cloud connection.
 
 Ollama must already run locally at `http://127.0.0.1:11434/api/chat`. Configure its server with `OLLAMA_NO_CLOUD=1`. The application disables environment proxies, redirects and credentials and offers no tools. Known cloud model suffixes are rejected, but a separately configured server/custom alias cannot be certified by the application.
 

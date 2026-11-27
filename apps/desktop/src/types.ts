@@ -34,7 +34,7 @@ export type LiveEvent =
   | {type: 'metrics'; frames: number}
   | {type: 'generation_failed'; session_id: string; question_id: string; code: GenerationFailureCode}
   | {type: 'generated_suggestion'; kind: 'ai_generated'; session_id: string; question_id: string;
-      question: string; language: 'en-US' | 'es-MX'; answer: string; provider: 'ollama'; model: string; source: null}
+      question: string; language: 'en-US' | 'es-MX'; answer: string; provider: 'ollama' | 'deepseek'; model: string; source: null}
   | {type: 'suggestion'; question: string; status: 'found' | 'no_evidence';
       session_id?: string; question_id?: string;
       answer: string | null; match_type: 'exact_qa' | 'semantic_qa' | null;

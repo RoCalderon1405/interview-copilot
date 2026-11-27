@@ -25,7 +25,7 @@ test('compact capture keeps authorization and stop visible while diagnostics and
 });
 
 function harness({selected = 'vosk', available = true, deferCapture = false, bridge = false, deferWorklet = false, captureError,
-  deepgram, uiLanguage = 'es', liveStatus, availabilitySignal = () => new AbortController().signal} = {}) {
+  deepgram, llm, uiLanguage = 'es', liveStatus, availabilitySignal = () => new AbortController().signal} = {}) {
   const elements = new Map();
   const calls = [];
   const sockets = [];
@@ -34,7 +34,9 @@ function harness({selected = 'vosk', available = true, deferCapture = false, bri
   let resolveCapture;
   function element(id) {
     if (!elements.has(id)) elements.set(id, {
-      value: id === 'provider' ? selected : id === 'language' ? 'en-US' : id === 'vocabulary-profile' ? 'general' : '',
+      value: id === 'provider' ? selected : id === 'language' ? 'en-US'
+        : id === 'vocabulary-profile' ? 'general' : id === 'llm-provider' ? 'ollama'
+        : id === 'llm-model' ? 'deepseek-flash' : '',
       disabled: id === 'vocabulary-profile' && selected !== 'deepgram', checked: id === 'consent', textContent: '', style: {}, dataset: {}, handlers: {},
        addEventListener(type, handler) { this.handlers[type] = handler; },
        focus() { calls.push(['focus',id]); },
@@ -68,7 +70,11 @@ function harness({selected = 'vosk', available = true, deferCapture = false, bri
     vosk: {languages: {'en-US': {available}}},
     'faster-whisper': {languages: {'en-US': {available}}},
     deepgram: deepgram ?? {languages: {'en-US': {available}}},
-  }};
+  }, llm: llm ?? {default_provider: 'ollama', providers: {
+    ollama: {available: false},
+    deepseek: {configured: false, credential_source: 'none', gate_enabled: true,
+      configuration_error: null, available: false},
+  }}};
   const translationContext = {window:{}};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../public/ui-language.js'),'utf8'), translationContext);
   const context = {
@@ -292,7 +298,10 @@ test('capture availability refresh shows loading then visible success, no-change
 test('Vosk remains the HTML default and capture stays directly in the click', async () => {
   const html = fs.readFileSync(path.join(__dirname, 'transcribe.html'), 'utf8');
   assert.match(html, /value="vosk" selected/);
+  assert.match(html, /id="llm-controls"[^>]*hidden/);
+  assert.doesNotMatch(html, /id="llm-consent"[^>]*\bchecked\b/);
   const h = harness();
+  assert.equal(h.element('llm-controls').hidden, true);
   const pending = h.element('start').handlers.click();
   assert.equal(h.calls.filter(call => call[0] === 'capture').length, 1);
   assert.equal(h.element('provider').disabled, true);
@@ -386,6 +395,115 @@ test('Deepgram requires renewed cloud consent and binds provider in the authoriz
   assert.equal(h.element('partial').textContent, 'Escuchando…');
 });
 
+
+test('cloud LLM selection stays integrated-only, requires per-start consent and binds the exact model', async () => {
+  const standalone = harness();
+  assert.equal(standalone.element('llm-controls').hidden, true);
+  assert.equal(standalone.element('llm-provider').value, 'ollama');
+
+  const h = harness({bridge: true, llm: {default_provider: 'ollama', providers: {
+    ollama: {available: false},
+    deepseek: {configured: true, credential_source: 'windows', configuration_error: null, available: true},
+  }}});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.element('llm-controls').hidden, false);
+  h.element('llm-provider').value = 'deepseek';
+  h.element('llm-provider').handlers.change();
+  assert.equal(h.element('llm-consent').checked, false);
+  assert.equal(h.element('llm-consent-notice').hidden, false);
+  assert.equal(h.element('llm-model-label').hidden, false);
+  assert.equal(h.element('start').disabled, true);
+  assert.match(h.element('llm-status').textContent, /configurado localmente.*Verificación remota: no realizada.*pueden aplicarse cargos/);
+  await h.element('start').handlers.click();
+  assert.equal(h.calls.some(call => call[0] === 'capture'), false);
+  h.element('llm-consent').checked = true;
+  h.element('llm-consent').handlers.change();
+  assert.equal(h.element('start').disabled, false);
+  await h.element('start').handlers.click();
+  const grant = h.calls.find(call => call[0] === 'fetch' && call[1].endsWith('/live-token'));
+  assert.deepEqual(grant[2], {language: 'en-US', provider: 'vosk', consent: true, vocabulary_profile: 'general',
+    llm_provider: 'deepseek', llm_consent: true, llm_model: 'deepseek-flash'});
+  // Consent authorizes this start only.
+  assert.equal(h.element('llm-consent').checked, false);
+  const socket = h.sockets[0];
+  socket.onopen();
+  assert.deepEqual(JSON.parse(socket.sent[0]), {
+    type: 'start', token: 'synthetic-token', provider: 'vosk', language: 'en-US',
+  });
+  socket.onmessage({data: JSON.stringify({type: 'ready', provider: 'vosk', language: 'en-US',
+    llm_provider: 'deepseek', llm_model: 'deepseek-flash',
+    sample_rate: 16000, sample_format: 'pcm_s16le', channels: 1})});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(h.calls.includes('worklet'));
+  h.element('stop').handlers.click();
+  socket.onclose({code: 1000});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.element('llm-provider').disabled, false);
+  assert.equal(h.element('llm-consent').checked, false);
+
+  h.element('llm-provider').value = 'deepseek';
+  h.element('llm-provider').handlers.change();
+  h.element('llm-consent').checked = true;
+  h.element('llm-model').value = 'deepseek-v4-pro';
+  h.element('llm-model').handlers.change();
+  assert.equal(h.element('llm-consent').checked, false);
+  assert.equal(h.element('start').disabled, true);
+});
+
+test('DeepSeek local configuration errors are visible without implying remote verification', async () => {
+  for (const [llm, expected] of [
+    [{configured: false, credential_source: 'none', configuration_error: null},
+      /No hay una clave de DeepSeek.*búsqueda documental sigue disponible.*no se iniciará/],
+    [{configured: false, credential_source: 'error', configuration_error: 'invalid_environment'},
+      /COPILOT_DEEPSEEK_API_KEY es inválida.*prioridad sobre Windows.*no se iniciará/],
+    [{configured: false, credential_source: 'error', configuration_error: 'credential_unavailable'},
+      /No se pudo leer la configuración local.*no se iniciará/],
+    [{configured: false, credential_source: 'none', configuration_error: 'windows_required'},
+      /solo está disponible en el flujo de desarrollo de Windows/],
+  ]) {
+    const h = harness({bridge: true, llm: {default_provider: 'ollama', providers: {
+      ollama: {available: false}, deepseek: llm,
+    }}});
+    await new Promise(resolve => setImmediate(resolve));
+    h.element('llm-provider').value = 'deepseek';
+    h.element('llm-provider').handlers.change();
+    assert.match(h.element('llm-status').textContent, expected);
+    assert.doesNotMatch(h.element('llm-status').textContent, /Autenticación remota confirmada|clave válida/i);
+  }
+});
+
+test('backend cloud gate blocks Start distinctly from OS support and names the opt-in', async () => {
+  const h = harness({bridge: true, llm: {default_provider: 'ollama', providers: {
+    ollama: {available: false},
+    deepseek: {configured: true, credential_source: 'windows', gate_enabled: false,
+      configuration_error: 'cloud_llm_disabled', available: false},
+  }}});
+  await new Promise(resolve => setImmediate(resolve));
+  h.element('llm-provider').value = 'deepseek';
+  h.element('llm-provider').handlers.change();
+  assert.equal(h.element('start').disabled, true);
+  assert.equal(h.element('llm-consent').disabled, true);
+  assert.match(h.element('llm-status').textContent, /COPILOT_ALLOW_CLOUD_LLM=true/);
+  assert.match(h.element('llm-status').textContent, /selecciona Ollama local/);
+  assert.doesNotMatch(h.element('llm-status').textContent, /flujo de desarrollo de Windows/);
+  h.element('llm-provider').value = 'ollama';
+  h.element('llm-provider').handlers.change();
+  assert.equal(h.element('start').disabled, false);
+  assert.equal(h.element('llm-consent').disabled, false);
+
+  const timeout = harness({bridge: true, llm: {default_provider: 'ollama', providers: {
+    ollama: {available: false},
+    deepseek: {configured: true, credential_source: 'windows', gate_enabled: true,
+      configuration_error: 'invalid_generation_timeout', available: false},
+  }}});
+  await new Promise(resolve => setImmediate(resolve));
+  timeout.element('llm-provider').value = 'deepseek';
+  timeout.element('llm-provider').handlers.change();
+  assert.match(timeout.element('llm-status').textContent, /plazo de generación.*inválido/);
+  timeout.element('llm-consent').checked = true;
+  timeout.element('llm-consent').handlers.change();
+  assert.equal(timeout.element('start').disabled, false);
+});
 
 test('Vocabulary profile is visible only for Deepgram and cannot change mid-session', async () => {
   const html = fs.readFileSync(path.join(__dirname, 'transcribe.html'), 'utf8');

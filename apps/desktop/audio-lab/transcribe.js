@@ -4,9 +4,21 @@ const API = 'http://127.0.0.1:8765';
 const SOCKET = 'ws://127.0.0.1:8765/live/transcribe';
 const consent = document.getElementById('consent');
 const consentDescription = document.getElementById('consent-description');
+const llmControls = document.getElementById('llm-controls');
+const llmProvider = document.getElementById('llm-provider');
+const llmModel = document.getElementById('llm-model');
+const llmModelLabel = document.getElementById('llm-model-label');
+const llmStatus = document.getElementById('llm-status');
+const llmConsent = document.getElementById('llm-consent');
+const llmConsentNotice = document.getElementById('llm-consent-notice');
+const llmConsentStatus = document.getElementById('llm-consent-status');
 const start = document.getElementById('start');
 const stop = document.getElementById('stop');
 const hideControls = document.getElementById('hide-controls');
+// The standalone transcription page keeps its existing local-only contract.
+// Cloud question selection is exposed only inside the isolated Electron controls.
+const integratedLlm = Boolean(window.copilotCapture);
+if (llmControls) llmControls.hidden = !integratedLlm;
 function uiText(element, text) {
   if (window.copilotCaptureUi) window.copilotCaptureUi.set(element,text);
   else element.textContent = text;
@@ -70,6 +82,8 @@ let busy = false, stopping = false, pcmFrames = 0, stopTimeout = null;
 let lastPublishedMetric = 0;
 let captureRevision = 0;
 let captureAttempt = 0;
+let llmStartBlocked = false;
+let lastLlmData = null;
 function publishPhase(phase) {
   if (captureAttempt) publish({type:'capture_state', phase, attempt:captureAttempt});
 }
@@ -77,6 +91,66 @@ function engineLabel() {
   return provider.value === 'faster-whisper' ? 'Faster-Whisper' : provider.value === 'deepgram' ? 'Deepgram Nova-3' : 'Vosk';
 }
 function isCloud() { return provider.value === 'deepgram'; }
+function isCloudLlm() { return integratedLlm && llmProvider.value === 'deepseek'; }
+function updateStartState() {
+  start.disabled = busy || !consent.checked ||
+    (isCloudLlm() && (!llmConsent.checked || llmStartBlocked));
+}
+function updateLlmConsent() {
+  const cloud = isCloudLlm();
+  llmConsentNotice.hidden = !cloud;
+  llmModelLabel.hidden = !cloud;
+  llmModel.disabled = !cloud || busy;
+  llmConsent.disabled = busy || (cloud && llmStartBlocked);
+  if (!cloud) llmConsent.checked = false;
+  uiText(llmConsentStatus, busy && cloud
+    ? 'Consentimiento aplicado a este inicio. Se reinicia al detener o reiniciar.'
+    : llmConsent.checked
+      ? 'Consentimiento para esta sesión seleccionado. Se reinicia en cada inicio.'
+      : 'Falta el consentimiento para enviar la pregunta a DeepSeek.');
+  updateStartState();
+}
+function updateLlmStatus(data) {
+  let text;
+  let blocked = false;
+  if (!integratedLlm) {
+    text = 'La generación en la nube solo está disponible en los controles integrados de Electron para desarrollo en Windows.';
+  } else if (!data?.llm?.providers) {
+    text = 'Configuración local de IA sin confirmar. La búsqueda documental sigue disponible.';
+  } else if (!isCloudLlm()) {
+    const ollama = data?.llm?.providers?.ollama;
+    text = ollama?.available
+      ? 'Ollama local está habilitado en el backend. Las sugerencias siguen sin verificación y sin respaldo documental.'
+      : 'Ollama local no está habilitado o configurado en el backend. La búsqueda documental sigue disponible.';
+  } else {
+    const deepseek = data?.llm?.providers?.deepseek;
+    if (!deepseek) {
+      text = 'Configuración local de DeepSeek sin confirmar. La búsqueda documental sigue disponible. La generación en la nube no se iniciará hasta confirmar la configuración.';
+    } else if (deepseek.configuration_error === 'windows_required') {
+      blocked = true;
+      text = 'DeepSeek solo está disponible en el flujo de desarrollo de Windows. Selecciona Ollama local para continuar. La búsqueda documental sigue disponible.';
+    } else if (deepseek.configuration_error === 'cloud_llm_disabled' || deepseek.gate_enabled === false) {
+      blocked = true;
+      text = 'La puerta de desarrollo del backend para IA cloud está desactivada. Define COPILOT_ALLOW_CLOUD_LLM=true en el backend y reinícialo, o selecciona Ollama local para continuar. Esto no envía nada: cada sesión sigue necesitando seleccionar DeepSeek y dar consentimiento. La búsqueda documental sigue disponible.';
+    } else if (deepseek.configuration_error === 'invalid_environment') {
+      text = 'COPILOT_DEEPSEEK_API_KEY es inválida y tiene prioridad sobre Windows. La búsqueda documental sigue disponible. La generación en la nube no se iniciará mientras la variable siga inválida. Corrige o elimina la variable y reinicia el backend.';
+    } else if (deepseek.configuration_error === 'invalid_generation_timeout') {
+      text = 'El plazo de generación configurado en el backend es inválido. La generación de IA no está disponible. La búsqueda documental sigue disponible.';
+    } else if (deepseek.configuration_error || deepseek.credential_source === 'error') {
+      text = 'No se pudo leer la configuración local de DeepSeek. La búsqueda documental sigue disponible. La generación en la nube no se iniciará mientras no se pueda leer la configuración.';
+    } else if (deepseek.configured === false) {
+      text = 'No hay una clave de DeepSeek configurada. La búsqueda documental sigue disponible. La generación en la nube no se iniciará mientras falte la configuración. Configúrala en Settings y actualiza la disponibilidad.';
+    } else if (deepseek.configured === true) {
+      text = 'DeepSeek está configurado localmente. Verificación remota: no realizada. La clave puede no tener acceso o saldo; pueden aplicarse cargos.';
+    } else {
+      text = 'Configuración local de DeepSeek sin confirmar. La búsqueda documental sigue disponible. La generación en la nube no se iniciará hasta confirmar la configuración.';
+    }
+  }
+  llmStartBlocked = blocked;
+  llmConsent.disabled = busy || (isCloudLlm() && blocked);
+  uiText(llmStatus, text);
+  updateStartState();
+}
 function updateConsent() {
   uiText(consentDescription, isCloud()
     ? 'Autorizo capturar todo el audio de salida de Windows y enviarlo mediante el backend a Deepgram (nube, con posibles cargos y tratamiento conforme a la política del proveedor).'
@@ -87,6 +161,7 @@ function updateConsent() {
       : 'Falta el consentimiento de audio. Revisa y marca la casilla solo si estás de acuerdo.');
 }
 updateConsent();
+updateLlmConsent();
 function publish(packet) {
   // No bridge in the standalone lab: the original validated path stays independent.
   window.copilotCapture?.publish(packet);
@@ -103,7 +178,18 @@ function setStatus(text) {
   publish({type:'status',text});
 }
 
-consent.addEventListener('change', () => { start.disabled = busy || !consent.checked; updateConsent(); });
+consent.addEventListener('change', () => { updateConsent(); updateStartState(); });
+llmProvider.addEventListener('change', () => {
+  // A new provider is a new selection; cloud question consent is never inherited.
+  llmConsent.checked = false;
+  updateLlmConsent();
+  updateLlmStatus(lastLlmData);
+});
+llmModel.addEventListener('change', () => {
+  llmConsent.checked = false;
+  updateLlmConsent();
+});
+llmConsent.addEventListener('change', updateLlmConsent);
 
 async function updateSemanticStatus() {
   try {
@@ -147,6 +233,8 @@ async function updateSpeechStatus() {
     if (!response.ok) throw new Error('unavailable');
     const data = await response.json();
     if (revision !== speechStatusRevision) return;
+    lastLlmData = data;
+    updateLlmStatus(data);
     const selected = data.providers?.[selectedProvider] ?? (selectedProvider === 'vosk' ? data : null);
     updateAvailabilityNotice(selected, selectedProvider, selectedLanguage);
     uiText(speechStatus, selectedProvider === 'deepgram' ? deepgramStatus(selected, selectedLanguage) : selected?.languages?.[selectedLanguage]?.available
@@ -154,6 +242,8 @@ async function updateSpeechStatus() {
       : `${engineLabel()} no disponible para este idioma. Revisa el runtime o modelo local. No hay fallback automático.`);
   } catch {
     if (revision === speechStatusRevision) {
+      lastLlmData = null;
+      updateLlmStatus(null);
       notice('failure','Error al comprobar la disponibilidad');
       uiText(speechStatus, 'No se pudo consultar el motor. Verifica el backend antes de iniciar.');
     }
@@ -235,8 +325,12 @@ async function cleanup() {
   hideControls.disabled = true;
   language.disabled = false;
   provider.disabled = false;
+  llmProvider.disabled = false;
+  // Consent is per start/restart, never retained across a session.
+  llmConsent.checked = false;
+  updateLlmConsent();
   vocabularyProfile.disabled = !isCloud();
-  start.disabled = !consent.checked;
+  updateStartState();
   level.style.width = '0%';
   if (closingContext) { try { await closingContext.close(); } catch { /* already closed */ } }
   if (revision === captureRevision) publishPhase('stopped');
@@ -294,7 +388,7 @@ async function beginPcm(revision) {
 }
 
 start.addEventListener('click', async () => {
-  if (!consent.checked || busy) return;
+  if (!consent.checked || busy || (isCloudLlm() && !llmConsent.checked)) return;
   const revision = ++captureRevision;
   captureAttempt++;
   ++speechStatusRevision;
@@ -306,8 +400,18 @@ start.addEventListener('click', async () => {
   language.disabled = true;
   provider.disabled = true;
   vocabularyProfile.disabled = true;
+  llmProvider.disabled = true;
+  llmModel.disabled = true;
+  llmConsent.disabled = true;
   const selectedProvider = provider.value;
   const selectedLanguage = language.value;
+  const selectedLlm = integratedLlm ? llmProvider.value : 'ollama';
+  const selectedLlmModel = selectedLlm === 'deepseek' ? llmModel.value : null;
+  if (selectedLlm === 'deepseek') {
+    // Consent authorizes this start only; a restart requires a new opt-in.
+    llmConsent.checked = false;
+    updateLlmConsent();
+  }
   stop.disabled = false;
   uiText(partial, 'Esperando voz…');
   finals.replaceChildren();
@@ -360,10 +464,17 @@ start.addEventListener('click', async () => {
     }
     const session = await postJson('/sessions', { mode: 'live' });
     if (revision !== captureRevision || !busy || stopping) return;
-    const grant = await postJson(`/sessions/${encodeURIComponent(session.id)}/live-token`, {
+    const grantBody = {
       language: selectedLanguage, provider: selectedProvider, consent: true,
       vocabulary_profile: selectedProvider === 'deepgram' ? vocabularyProfile.value : 'general',
-    });
+    };
+    // The standalone lab keeps its existing local-only token request.
+    if (integratedLlm) {
+      grantBody.llm_provider = selectedLlm;
+      grantBody.llm_consent = selectedLlm === 'deepseek';
+      if (selectedLlmModel) grantBody.llm_model = selectedLlmModel;
+    }
+    const grant = await postJson(`/sessions/${encodeURIComponent(session.id)}/live-token`, grantBody);
     if (revision !== captureRevision || !busy || stopping) return;
     setStatus(`Conectando con ${engineLabel()}…`);
     socket = new WebSocket(SOCKET);
@@ -381,6 +492,9 @@ start.addEventListener('click', async () => {
       if (packet.type === 'ready') {
         if (packet.provider !== selectedProvider || packet.language !== selectedLanguage) {
           void fail(new Error('El motor o idioma autorizado es diferente'));
+        } else if (selectedLlm === 'deepseek' &&
+          (packet.llm_provider !== 'deepseek' || packet.llm_model !== selectedLlmModel)) {
+          void fail(new Error('El proveedor o modelo de IA autorizado es diferente'));
         } else if (packet.sample_rate !== 16000 || packet.sample_format !== 'pcm_s16le' || packet.channels !== 1) {
           void fail(new Error('El formato requerido por el backend es diferente'));
         } else {

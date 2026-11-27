@@ -296,6 +296,10 @@ assert GenerationService is not None
 def test_enabled_environment_composes_without_network_or_new_public_endpoint(monkeypatch, tmp_path):
     monkeypatch.setenv("COPILOT_LLM_ENABLED", "true")
     monkeypatch.setenv("COPILOT_OLLAMA_MODEL", "local")
+    # A stored/keyed DeepSeek selection is per connection; it must not compose
+    # or contact the cloud during application startup, even with the gate on.
+    monkeypatch.setenv("COPILOT_DEEPSEEK_API_KEY", "sk-test-0123456789abcdef")
+    monkeypatch.setenv("COPILOT_ALLOW_CLOUD_LLM", "true")
     monkeypatch.setenv("COPILOT_DATA_DIR", str(tmp_path))
     import httpx
     from app.main import create_app
