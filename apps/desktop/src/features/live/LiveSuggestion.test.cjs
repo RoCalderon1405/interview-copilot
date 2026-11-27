@@ -28,7 +28,8 @@ const {LiveWorkspace} = load('LiveWorkspace.tsx', {
   './liveState': {initialLiveState,receiveLiveEvent,restoreLiveState},
 });
 const {DeepgramSettings}=load('../settings/DeepgramSettings.tsx', {'../../api':{api:{}},'../../i18n':i18n});
-const {default:App, focusScrollDelta} = load('../../App.tsx', {'./api':{api:{}},'./features/live/LiveWorkspace':{LiveWorkspace},'./features/settings/DeepgramSettings':{DeepgramSettings},'./i18n':i18n});
+const {DeepSeekSettings}=load('../settings/DeepSeekSettings.tsx', {'../../i18n':i18n});
+const {default:App, focusScrollDelta} = load('../../App.tsx', {'./api':{api:{}},'./features/live/LiveWorkspace':{LiveWorkspace},'./features/settings/DeepgramSettings':{DeepgramSettings},'./features/settings/DeepSeekSettings':{DeepSeekSettings},'./i18n':i18n});
 const render = item => renderToStaticMarkup(React.createElement(LiveSuggestion,{item}));
 test('Knowledge exposes disabled/enabled indexing, EN/ES progress and retry without authorizing downloads; polling is scoped',async()=>{
   try {for(language of ['es','en']) {
@@ -57,6 +58,7 @@ test('Knowledge exposes disabled/enabled indexing, EN/ES progress and retry with
     }});
     const {Knowledge}=load('../../App.tsx',{react:hooks,'./api':{api:knowledgeApi},'./i18n':i18n,
       './features/live/LiveWorkspace':{LiveWorkspace},'./features/settings/DeepgramSettings':{DeepgramSettings},
+      './features/settings/DeepSeekSettings':{DeepSeekSettings},
     },{AbortController,setTimeout:fn=>{timers.set(++timerId,fn);return timerId;},clearTimeout:id=>timers.delete(id)});
     const render=()=>{cursor=0;tree=Knowledge({docs,onUpload:async()=>{},refresh:async()=>{},showError(){},onNotice(){}});
       const html=renderToStaticMarkup(tree);while(pendingEffects.length)pendingEffects.shift()();return html;};
@@ -100,7 +102,8 @@ test('native Settings event navigates to the existing Deepgram section in EN/ES 
     const bridge={onDeepgramSettings:fn=>{callback=fn;return ()=>{callback=null;};},getWindowState:async()=>({mode:'expanded'})};
     const {default:Shell}=load('../../App.tsx',{
       react:hooks,'./api':{api:{health:async()=>{},documents:async()=>({documents:[]})}},
-      './features/live/LiveWorkspace':{LiveWorkspace},'./features/settings/DeepgramSettings':{DeepgramSettings},'./i18n':i18n,
+      './features/live/LiveWorkspace':{LiveWorkspace},'./features/settings/DeepgramSettings':{DeepgramSettings},
+      './features/settings/DeepSeekSettings':{DeepSeekSettings},'./i18n':i18n,
     },{window:{copilotDesktop:bridge},requestAnimationFrame:fn=>fn(),
       document:{documentElement:{classList:{toggle(){},remove(){}}},getElementById:id=>({focus:()=>{focused=id;}})}});
     const render=()=>{cursor=0;return renderToStaticMarkup(Shell());};
@@ -127,6 +130,113 @@ test('Deepgram Settings never renders a credential input and explains Windows en
       assert.doesNotMatch(html,/<input|<textarea|type="password"|localStorage/);
     }
   }finally{language='es';}
+});
+
+/** DeepSeek stays local-only: no backend status and no Deepgram bridge calls. */
+function deepseekHarness(manage, replayEffect=false) {
+  const slots=[];
+  let cursor=0, started=false, tree;
+  const effects=[];
+  const hooks={...React,
+    useState(initial){const index=cursor++;if(!(index in slots))slots[index]=initial;
+      return [slots[index],value=>{slots[index]=typeof value==='function'?value(slots[index]):value;}];},
+    useRef(initial){const index=cursor++;return slots[index]??(slots[index]={current:initial});},
+    useEffect(effect){if(!started)effects.push(effect);},
+  };
+  const {DeepSeekSettings:Settings}=load('../settings/DeepSeekSettings.tsx',{
+    react:hooks,'../../i18n':i18n,
+  },{window:{copilotDesktop:{manageDeepseekKey:manage,cancelDeepseekKey:async()=>true}}});
+  const render=()=>{cursor=0;tree=Settings();return renderToStaticMarkup(tree);};
+  const find=(node,label)=>{
+    if(!React.isValidElement(node))return;
+    if(node.type==='button' && node.props.children===label)return node;
+    for(const child of React.Children.toArray(node.props.children)){const found=find(child,label);if(found)return found;}
+  };
+  render();started=true;for(const effect of effects){if(replayEffect)effect()();effect();}
+  const settle=async()=>{await new Promise(setImmediate);await new Promise(setImmediate);return render();};
+  return {html:render,settle,async click(label){render();const button=find(tree,label);assert.ok(button,label);
+    assert.notEqual(button.props.disabled,true);await button.props.onClick();return settle();}};
+}
+
+test('DeepSeek Settings is independent, local-only and never renders a credential input',async()=>{
+  try {for(language of ['en','es']) {
+    const calls=[];
+    const h=deepseekHarness(async action=>{calls.push(action);return {result:'status',stored:false};});
+    const html=await h.settle();
+    assert.deepEqual(calls,['status']);
+    assert.match(html,/API Key de DeepSeek \(nube\)|DeepSeek API Key \(cloud\)/);
+    assert.match(html,language==='en'?/DeepSeek key missing/:/Falta la clave de DeepSeek/);
+    assert.match(html,language==='en'?/independent of Deepgram and Ollama/:/independiente de Deepgram y Ollama/);
+    assert.match(html,language==='en'?/No OpenCode credential/:/ninguna credencial de OpenCode/i);
+    assert.match(html,language==='en'?/not available at this stage/:/no están disponibles en esta etapa/);
+    assert.match(html,language==='en'?/Remote verification: not performed/:/Verificación remota: no realizada/);
+    assert.match(html,language==='en'?/Configure key/:/Configurar clave/);
+    assert.doesNotMatch(html,/<input|<textarea|type="password"|localStorage/);
+  }}finally{language='es';}
+});
+
+test('DeepSeek outcomes distinguish cancel, timeout and unknown without leaking details in EN/ES',async()=>{
+  try {for(language of ['en','es'])for(const outcome of ['cancelled','timed_out','unexpected','throws']) {
+    const h=deepseekHarness(async action=>{
+      if(action==='status')return {result:'status',stored:false};
+      if(outcome==='throws')throw new Error('private DeepSeek detail');
+      return {result:outcome,stored:null};
+    });
+    await h.settle();
+    const html=await h.click(language==='en'?'Configure key':'Configurar clave');
+    const expected={cancelled:['Operation cancelled.','Operación cancelada.'],
+      timed_out:['It may have completed.','La operación puede haberse completado.'],
+      unexpected:['Outcome unconfirmed.','Resultado sin confirmar.'],
+      throws:['The outcome could not be confirmed.','No se pudo confirmar el resultado.']};
+    assert.ok(html.includes(expected[outcome][language==='en'?0:1]));
+    assert.doesNotMatch(html,/private DeepSeek detail/);
+    // The local status refresh never becomes an availability or authentication claim.
+    assert.match(html,language==='en'?/not authentication with DeepSeek/:/no la autenticación con DeepSeek/);
+  }}finally{language='es';}
+});
+
+test('DeepSeek rejected or unsupported state cannot leave stale mutations enabled',async()=>{
+  // A rejected operation followed by a failed status must clear editable state.
+  let failStatus=false;
+  const rejected=deepseekHarness(async action=>{
+    if(action==='status'){
+      if(failStatus)throw new Error('private status detail');
+      return {result:'status',stored:true};
+    }
+    failStatus=true;
+    throw new Error('private operation detail');
+  });
+  await rejected.settle();
+  const failed=await rejected.click('Reemplazar clave');
+  assert.match(failed,/No se pudo confirmar el resultado/);
+  assert.match(failed,/<button[^>]*disabled=""[^>]*>Configurar clave/);
+  assert.doesNotMatch(failed,/private status detail|private operation detail/);
+
+  // A trusted bridge that reports unsupported is not a generic status failure.
+  const unsupported=deepseekHarness(async()=>({result:'unsupported',stored:null}));
+  const html=await unsupported.settle();
+  assert.match(html,/Gestión disponible solo en Electron para desarrollo en Windows/);
+  assert.match(html,/Estado local de DeepSeek sin confirmar/);
+  assert.doesNotMatch(html,/No se pudo leer el estado local de DeepSeek/);
+  assert.match(html,/<button[^>]*disabled=""[^>]*>Configurar clave/);
+});
+
+test('DeepSeek deletion requires confirmation and Keep preserves a separate stored key',async()=>{
+  const actions=[];
+  let stored=true;
+  const h=deepseekHarness(async action=>{actions.push(action);
+    if(action==='delete')stored=false;
+    return {result:action==='status'?'status':'deleted',stored};
+  });
+  await h.settle();
+  await h.click('Eliminar clave guardada');
+  assert.match(h.html(),/¿Eliminar la clave de DeepSeek guardada en Windows\?/);
+  assert.match(await h.click('Conservar clave'),/Eliminación cancelada\. La clave de DeepSeek no cambia\./);
+  assert.ok(!actions.includes('delete'));
+  await h.click('Eliminar clave guardada');
+  const html=await h.click('Confirmar eliminación');
+  assert.match(html,/Clave de DeepSeek en Windows: no configurada/);
+  assert.ok(actions.includes('delete'));
 });
 
 /** Minimal hook driver for async presentation behavior, not native/Windows acceptance. */

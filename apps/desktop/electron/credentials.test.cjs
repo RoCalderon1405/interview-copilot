@@ -30,10 +30,48 @@ test('fixed trusted spawn, strict status schema and no raw provider output reach
   assert.match(args[1],/apps[\\/]api[\\/]app[\\/]infrastructure[\\/]deepgram_credentials_helper\.py$/);
   assert.deepEqual(args.slice(2),['configure','12','en',String(process.pid)]);
   assert.equal(config.shell,false);assert.equal(config.env.COPILOT_DEEPGRAM_API_KEY,undefined);
+  assert.equal(config.env.COPILOT_DEEPSEEK_API_KEY,undefined);
   child.stdout.write('{"result":"configured","stored":true}');child.emit('close',0);
   assert.deepEqual(await pending,{result:'configured',stored:true});
   for(const raw of ['fictitious-secret','{"result":"status","stored":true,"key":"fictitious-secret"}','{"result":"unknown","stored":false}','{"result":"status","stored":"key"}'])assert.deepEqual(parse(raw),{result:'error',stored:null});
   assert.deepEqual(h.calls,[false,true]);
+});
+test('DeepSeek keeps one shared modal operation, an allowlisted provider and no key-bearing args/env',async()=>{
+  const h=fixture();const pending=h.credentials.run('configure',h.win,'es','deepseek');
+  const {child,args,config}=h.children[0];
+  assert.match(args[1],/deepgram_credentials_helper\.py$/);
+  assert.deepEqual(args.slice(2),['configure','12','es',String(process.pid),'deepseek']);
+  assert.equal(config.env.COPILOT_DEEPGRAM_API_KEY,undefined);
+  assert.equal(config.env.COPILOT_DEEPSEEK_API_KEY,undefined);
+  assert.equal(args.some(value=>/fictitious|sk-test/.test(value)),false);
+  // One manager serializes native dialogs across providers.
+  assert.deepEqual(await h.credentials.run('status',h.win,'es','deepgram'),{result:'busy',stored:null});
+  child.stdout.write('{"result":"configured","stored":true}');child.emit('close',0);
+  assert.deepEqual(await pending,{result:'configured',stored:true});
+  // Unknown providers never spawn a helper.
+  assert.deepEqual(await h.credentials.run('status',h.win,'es','openai'),{result:'error',stored:null});
+  assert.equal(h.children.length,1);
+});
+test('provider-scoped cancellation cannot cancel the other provider and leaves leases unchanged',async()=>{
+  const h=fixture();
+  const pending=h.credentials.run('configure',h.win,'en','deepgram');
+  const active=h.children[0].child;
+  assert.equal(h.credentials.cancel('deepseek'),false);
+  assert.equal(active.killed,false);
+  active.stdout.write('{"result":"cancelled","stored":null}');
+  assert.equal(h.credentials.cancel('deepgram'),true);
+  assert.equal((await pending).result,'cancelled');
+
+  // A capture lease is not a modal operation and keeps its existing lifetime.
+  const lease=h.credentials.lease(h.win);
+  const held=h.children[1].child;
+  assert.equal(h.credentials.cancel('deepseek'),false);
+  assert.equal(h.credentials.cancel(),false);
+  assert.equal(held.killed,false);
+  held.stdout.write('{"result":"leased","stored":null}\n');
+  const granted=await lease;
+  assert.equal(granted.result,'leased');
+  granted.release();
 });
 test('timeout, cancellation, output bounds and spawn errors restore interaction and release busy state',async()=>{
   for(const mode of ['timeout','cancel','overflow','error']) {
@@ -99,4 +137,8 @@ test('preload refuses non-enumerated credential arguments before they enter IPC'
   for(const value of ['fictitious-secret',{key:'fictitious-secret'},null,1])assert.equal((await bridge.manageDeepgramKey(value)).result,'error');
   assert.equal(sent.length,0);
   await bridge.manageDeepgramKey('status');assert.deepEqual(sent,[['copilot:deepgram-credentials','status']]);
+  for(const value of ['fictitious-secret',{key:'fictitious-secret'},null,1])assert.equal((await bridge.manageDeepseekKey(value)).result,'error');
+  assert.equal(sent.length,1);
+  await bridge.manageDeepseekKey('status');assert.deepEqual(sent.at(-1),['copilot:deepseek-credentials','status']);
+  await bridge.cancelDeepseekKey();assert.deepEqual(sent.at(-1),['copilot:deepseek-cancel']);
 });

@@ -1,14 +1,17 @@
-"""Windows-only Deepgram storage and crash-released capture/edit exclusion."""
+"""Windows-only provider credential storage and crash-released edit exclusion."""
 from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
+from dataclasses import dataclass
 import os
 from pathlib import Path
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 TARGET = "InterviewCopilot/Deepgram"
 KEY_ENV = "COPILOT_DEEPGRAM_API_KEY"
+DEEPSEEK_TARGET = "InterviewCopilot/DeepSeek"
+DEEPSEEK_KEY_ENV = "COPILOT_DEEPSEEK_API_KEY"
 
 
 class CredentialError(Exception):
@@ -48,11 +51,50 @@ def valid_key(value: str) -> bool:
     return 1 <= len(value) <= 256 and all(33 <= ord(char) <= 126 for char in value)
 
 
+def valid_deepseek_key(value: str) -> bool:
+    """Match the DeepSeek adapter: 16-200 URL-safe token characters, nothing else."""
+    return 16 <= len(value) <= 200 and all(
+        char.isascii() and (char.isalnum() or char in "._-") for char in value
+    )
+
+
+@dataclass(frozen=True)
+class CredentialSpec:
+    """Explicit allowlisted identity for one provider credential namespace.
+
+    The target, environment override and lock name never come from a renderer or
+    helper argument; callers can only select a key from ``CREDENTIAL_SPECS``.
+    """
+
+    name: str
+    display_name: str
+    target: str
+    env: str
+    gate_name: str
+    validate: Callable[[str], bool]
+
+
+CREDENTIAL_SPECS = {
+    "deepgram": CredentialSpec("deepgram", "Deepgram", TARGET, KEY_ENV, "deepgram.lock", valid_key),
+    "deepseek": CredentialSpec("deepseek", "DeepSeek", DEEPSEEK_TARGET, DEEPSEEK_KEY_ENV,
+                              "deepseek.lock", valid_deepseek_key),
+}
+
+
+def credential_spec(provider: str) -> CredentialSpec:
+    """Return only a fixed provider profile; reject unknown names."""
+    try:
+        return CREDENTIAL_SPECS[provider]
+    except (KeyError, TypeError):
+        raise CredentialError("unknown_provider") from None
+
+
 class WindowsCredentialStore:
     """Read/write one user-scoped generic credential; never enumerate credentials."""
 
-    def __init__(self, target: str = TARGET):
+    def __init__(self, target: str = TARGET, *, validate: Callable[[str], bool] = valid_key):
         self._target = target
+        self._validate = validate
 
     def read(self) -> str | None:
         """Read a token into backend memory, clearing the native buffer before release."""
@@ -74,8 +116,8 @@ class WindowsCredentialStore:
             api.CredFree(pointer)
 
     def write(self, key: str) -> None:
-        """Persist a validated token for this Windows user on this computer only."""
-        if not valid_key(key):
+        """Persist a token validated for this store's provider only."""
+        if not self._validate(key):
             raise CredentialError("invalid_key")
         api = _libraries()
         buffer = ctypes.create_unicode_buffer(key)
@@ -99,20 +141,26 @@ class WindowsCredentialStore:
             raise CredentialError("credential_delete_failed")
 
 
-def resolve_key(environ: Mapping[str, str], store: WindowsCredentialStore) -> tuple[str | None, str]:
-    """Resolve environment first; an explicitly invalid override never falls back."""
-    if KEY_ENV in environ:
-        key = environ[KEY_ENV]
-        if not valid_key(key):
+def resolve_provider_key(spec: CredentialSpec, environ: Mapping[str, str],
+                         store: WindowsCredentialStore) -> tuple[str | None, str]:
+    """Resolve one provider's environment override, then its own Windows target only."""
+    if spec.env in environ:
+        key = environ[spec.env]
+        if not spec.validate(key):
             raise CredentialError("invalid_environment")
         return key, "environment"
     key = store.read() if os.name == "nt" else None
-    if key is not None and not valid_key(key):
+    if key is not None and not spec.validate(key):
         raise CredentialError("invalid_stored_credential")
     return key, "windows" if key is not None else "none"
 
 
-def credential_gate_path() -> Path:
+def resolve_key(environ: Mapping[str, str], store: WindowsCredentialStore) -> tuple[str | None, str]:
+    """Resolve the Deepgram key; an explicitly invalid override never falls back."""
+    return resolve_provider_key(CREDENTIAL_SPECS["deepgram"], environ, store)
+
+
+def _security_directory() -> Path:
     """Use a fixed per-user location independent of COPILOT_DATA_DIR and shell overrides."""
     if os.name != "nt":
         raise CredentialError("windows_required")
@@ -122,7 +170,17 @@ def credential_gate_path() -> Path:
     buffer = ctypes.create_unicode_buffer(260)
     if shell.SHGetFolderPathW(None, 0x1C, None, 0, buffer) != 0:
         raise CredentialError("profile_unavailable")
-    return Path(buffer.value) / "InterviewCopilot" / "security" / "deepgram.lock"
+    return Path(buffer.value) / "InterviewCopilot" / "security"
+
+
+def credential_gate_path(provider: str = "deepgram") -> Path:
+    """Return the fixed per-provider capture/edit lock; never a caller path."""
+    return _security_directory() / credential_spec(provider).gate_name
+
+
+def mutation_gate_path() -> Path:
+    """Serialize native credential dialogs across providers and processes."""
+    return _security_directory() / "credentials.lock"
 
 
 class CredentialGate:

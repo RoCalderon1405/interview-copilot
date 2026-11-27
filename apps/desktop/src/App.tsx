@@ -7,6 +7,7 @@ import {
 import { api } from './api';
 import {LiveWorkspace} from './features/live/LiveWorkspace';
 import {DeepgramSettings} from './features/settings/DeepgramSettings';
+import {DeepSeekSettings} from './features/settings/DeepSeekSettings';
 import {useI18n} from './i18n';
 import type { AnswerResponse, DocumentRecord, Feedback, LiveWindowState, PracticeQuestion, SemanticDocument, SemanticStatus, Session, SessionReport } from './types';
 
@@ -177,7 +178,7 @@ export default function App() {
           onTopState={onTopState} onTopBusy={onTopBusy}
           onModeChange={mode=>{void changeWindow('mode',mode);}}
           onOpacityChange={opacity=>{void changeWindow('opacity',opacity);}} onTopChange={()=>{void toggleOnTop();}}/>}
-        {page === 'settings' && <><SettingsPage /><DeepgramSettings /></>}
+        {page === 'settings' && <><SettingsPage /><DeepgramSettings /><DeepSeekSettings /></>}
       </div>
     </main>
   </div>;

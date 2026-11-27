@@ -115,7 +115,14 @@ export function DeepgramSettings() {
           : OUTCOMES[result?.result] ?? UNKNOWN_OUTCOME);
         await readStatus();
       }
-    }catch{if(alive.current){setNote(OUTCOMES.error);setNoteSeverity('error');}}
+    }catch{
+      if(alive.current){
+        setNote(OUTCOMES.error);setNoteSeverity('error');
+        // A rejected operation may still have completed; refresh rather than
+        // keeping a possibly stale editable state.
+        await readStatus();
+      }
+    }
     finally{working.current=false;if(alive.current)setBusy(false);}
   };
   const sourceCopy:Record<string,string>={

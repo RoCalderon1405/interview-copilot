@@ -331,9 +331,18 @@ app.whenReady().then(() => {
     const win=trustedWindow(event);
     if(!['status','configure','replace','delete'].includes(action))return {result:'error',stored:null};
     if(action!=='status' && captureWindow && !captureWindow.isDestroyed())return {result:'busy',stored:null};
-    return credentials.run(action,win,uiLanguage);
+    return credentials.run(action,win,uiLanguage,'deepgram');
   });
-  ipcMain.handle('copilot:deepgram-cancel',event=>{trustedWindow(event);credentials.cancel();return true;});
+  ipcMain.handle('copilot:deepgram-cancel',event=>{trustedWindow(event);credentials.cancel('deepgram');return true;});
+  // DeepSeek has its own target and namespace. The shared manager keeps one
+  // native modal operation at a time across both providers.
+  ipcMain.handle('copilot:deepseek-credentials', (event, action) => {
+    const win=trustedWindow(event);
+    if(!['status','configure','replace','delete'].includes(action))return {result:'error',stored:null};
+    if(action!=='status' && captureWindow && !captureWindow.isDestroyed())return {result:'busy',stored:null};
+    return credentials.run(action,win,uiLanguage,'deepseek');
+  });
+  ipcMain.handle('copilot:deepseek-cancel',event=>{trustedWindow(event);credentials.cancel('deepseek');return true;});
   ipcMain.handle('copilot:window-state', event => {
     const win = trustedWindow(event);
     return windowState(win);

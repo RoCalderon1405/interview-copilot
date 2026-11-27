@@ -3,6 +3,7 @@
 const path=require('node:path');
 const {spawn}=require('node:child_process');
 const RESULTS=new Set(['status','configured','deleted','cancelled','conflict','busy','error','unsupported','timed_out','leased']);
+const PROVIDERS=new Set(['deepgram','deepseek']);
 const error=()=>({result:'error',stored:null});
 function parse(line) {
   try {
@@ -16,7 +17,7 @@ function createCredentials({root,enabled,spawnChild=spawn,timeout=125000}) {
   const python=path.join(root,'.venv','Scripts','python.exe');
   const helper=path.join(root,'apps','api','app','infrastructure','deepgram_credentials_helper.py');
   let operation=null;
-  function start(action,win,language,lease=false) {
+  function start(action,win,language,lease=false,provider='deepgram') {
     let child,finished=false,output='',timer,forced=null;
     let resolveResult;
     const result=new Promise(resolve=>{resolveResult=resolve;});
@@ -40,8 +41,12 @@ function createCredentials({root,enabled,spawnChild=spawn,timeout=125000}) {
     try {
       const hwnd=win.getNativeWindowHandle();
       const owner=hwnd.length===8?hwnd.readBigUInt64LE().toString():hwnd.readUInt32LE().toString();
-      const env={...process.env};delete env.COPILOT_DEEPGRAM_API_KEY;
-      child=spawnChild(python,['-I',helper,action,owner,language,String(process.pid)],
+      // The helper never needs a provider key from the environment.
+      const env={...process.env};delete env.COPILOT_DEEPGRAM_API_KEY;delete env.COPILOT_DEEPSEEK_API_KEY;
+      const args=['-I',helper,action,owner,language,String(process.pid)];
+      // Deepgram keeps its original four-argument helper contract.
+      if(provider!=='deepgram')args.push(provider);
+      child=spawnChild(python,args,
         {cwd:root,shell:false,windowsHide:true,env,stdio:['pipe','pipe','pipe']});
       child.stdin.on('error',()=>{});
       child.stdout.on('data',chunk=>{
@@ -62,21 +67,26 @@ function createCredentials({root,enabled,spawnChild=spawn,timeout=125000}) {
       win.once('closed',stop);
       child.once('close',()=>win.removeListener('closed',stop));
     }catch{finish(error());}
-    return {result,cancel:()=>{forced='cancelled';stop();}};
+    return {result,provider,cancel:()=>{forced='cancelled';stop();}};
   }
   return {
     get busy(){return operation!==null;},
-    async run(action,win,language='es') {
+    async run(action,win,language='es',provider='deepgram') {
       if(!enabled)return {result:'unsupported',stored:null};
-      if(!['status','configure','replace','delete'].includes(action) || !['en','es'].includes(language))return error();
+      if(!['status','configure','replace','delete'].includes(action) || !['en','es'].includes(language) ||
+        !PROVIDERS.has(provider))return error();
       if(operation)return {result:'busy',stored:null};
-      operation=start(action,win,language);
+      operation=start(action,win,language,false,provider);
       try{return await operation.result;}finally{operation=null;}
     },
-    cancel(){operation?.cancel();},
+    /** Lifecycle shutdowns call this unscoped; renderer channels pass their provider. */
+    cancel(provider) {
+      if(!operation || (provider!==undefined && operation.provider!==provider))return false;
+      operation.cancel();return true;
+    },
     async lease(win) {
       if(!enabled)return null;
-      const pending=start('lease',win,'en',true);
+      const pending=start('lease',win,'en',true,'deepgram');
       const result=await pending.result;
       return result.result==='leased' && result.child.exitCode==null && !result.child.killed?result:null;
     },

@@ -18,7 +18,7 @@ function boot({packaged=false, platform='win32', trayFails=false, opaqueWindow=f
   const timers=new Set();
   let now=0;
   const credentialCalls=[];
-  const credentials={busy:false,run:async(action,_win,language)=>{credentialCalls.push({action,language});return {result:'status',stored:false};},cancel:()=>credentialCalls.push({action:'cancel'})};
+  const credentials={busy:false,run:async(action,_win,language,provider='deepgram')=>{credentialCalls.push({action,language,provider});return {result:'status',stored:false};},cancel:provider=>credentialCalls.push({action:'cancel',provider})};
   class Contents extends EventEmitter {
     constructor(){super();this.mainFrame={url:''};this.sent=[];this.session={setPermissionCheckHandler:fn=>{this.check=fn;},setPermissionRequestHandler:fn=>{this.request=fn;},setDisplayMediaRequestHandler:fn=>{this.display=fn;}};this.destroyed=false;}
     isDestroyed(){return this.destroyed;}
@@ -378,6 +378,22 @@ test('credential IPC authenticates the frame, allowlists actions and excludes ca
   assert.equal(h.credentialCalls.length,1);
 });
 
+test('DeepSeek credential IPC is separate, trusted, allowlisted and blocked during capture',async()=>{
+  const h=await boot();
+  const handler=h.handles.get('copilot:deepseek-credentials');
+  assert.throws(()=>handler({sender:{},senderFrame:h.window.webContents.mainFrame},'configure'),/Untrusted IPC/);
+  assert.throws(()=>handler({...e(h.window),senderFrame:{url:DEV}},'configure'),/Untrusted IPC/);
+  assert.equal((await invoke(h,'deepseek-credentials',{key:'fictitious'})).result,'error');
+  assert.equal((await invoke(h,'deepseek-credentials','delete','extra')).stored,false);
+  assert.equal(h.credentialCalls.at(-1).provider,'deepseek');
+  assert.equal((await invoke(h,'deepseek-credentials','status')).stored,false);
+  invoke(h,'live-open');
+  assert.equal((await invoke(h,'deepseek-credentials','replace')).result,'busy');
+  assert.equal(invoke(h,'deepseek-cancel'),true);
+  assert.deepEqual(h.credentialCalls.at(-1),{action:'cancel',provider:'deepseek'});
+  assert.equal(invoke(h,'deepgram-cancel'),true);
+  assert.deepEqual(h.credentialCalls.at(-1),{action:'cancel',provider:'deepgram'});
+});
 test('native capture denies media before enumeration when credential editing holds the guard',async()=>{
   const h=await boot({captureAllowed:false});invoke(h,'live-open');const win=h.windows[1];
   let granted;

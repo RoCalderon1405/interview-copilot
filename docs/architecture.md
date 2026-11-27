@@ -27,6 +27,14 @@ Remaining provider and metering tasks are tracked in the [roadmap](roadmap.md).
 
 Management and native capture remain Windows development-only. Operation/acceptance evidence lives in [Live Mode](live-mode.md#cloud-001--windows-key-management); operational guidance lives in [setup](setup.md#optional-deepgram-nova-3).
 
+### AI-002 Stage 2 — separate provider credential namespace
+
+- `windows_credentials.py` now exposes an explicit allowlist of credential profiles. Deepgram keeps `InterviewCopilot/Deepgram`, `COPILOT_DEEPGRAM_API_KEY` and `deepgram.lock`; DeepSeek uses `InterviewCopilot/DeepSeek`, `COPILOT_DEEPSEEK_API_KEY` and `deepseek.lock`. No renderer, IPC or helper argument selects a target, environment name or path.
+- DeepSeek keys are validated with the same bounded `[A-Za-z0-9._-]{16,200}` rule as the Stage 1 adapter. The generic Windows store accepts a provider validator, so an invalid value is never written even if a prompt or test store bypasses the native check.
+- Every mutation holds a global exclusive `%LOCALAPPDATA%\InterviewCopilot\security\credentials.lock` before its provider lock. Native capture leases also hold that global lock shared. This serializes CredUI dialogs across providers and processes while provider locks keep namespaces independent. The backend Live WebSocket still uses only the Deepgram lock; its behavior is unchanged.
+- `deepgram_credentials_helper.py` accepts one optional fifth argument naming an allowlisted provider. The four-argument Deepgram form stays compatible. Status output remains exactly `{result, stored}` and reports local presence only. The helper never receives a key in arguments or environment, and Electron removes both provider key variables from the child environment. Renderer cancel channels are provider-scoped, so one Settings section cannot cancel the other provider's modal; window/app shutdown still cancels unscoped. A rejected or unsupported status leaves mutations disabled until local presence is confirmed.
+- Settings adds a separate DeepSeek section using the same native dialog, Configure/Replace/Delete/Refresh actions, explicit delete confirmation, cancellation and timeout feedback. It never calls the Deepgram bridge or backend availability. A stored key is not provider selection, authentication, billing, model access or authorization to send questions.
+
 ## Current implementation
 
 ```text
@@ -157,9 +165,9 @@ The main window calls `setContentProtection(true)` on Windows and exposes a Sett
 
 Exclusion while remaining visible locally is a core Live requirement. Teams, Zoom and Google Meet compatibility remains pending real Windows sessions, separately by client/browser version and capture mode. It does not guarantee undetectability, hide the process or replace audio consent. See [manual validation](live-mode.md#screen-sharing-exclusion--manual-acceptance-pending).
 
-## PLANNED — commercial desktop and independent cloud LLM
+## Commercial desktop and cloud LLM direction
 
-The behavior above is current. This section records owner-approved direction only; no cloud LLM adapter, Settings provider lifecycle or cloud generation exists today.
+The behavior above is current. Stage 1 includes an isolated DeepSeek adapter. Stage 2 adds separate local DeepSeek key management in Settings. The adapter is still not composed or selectable: no cloud generation, provider selection, disclosure or transmission exists today. The rest of this section records owner-approved direction.
 
 ### Product boundary
 
@@ -167,15 +175,16 @@ Interview Copilot is a **commercial Windows desktop application**, local-first a
 
 ### LLM provider independent of STT
 
-STT selection (Vosk default, Faster-Whisper, Deepgram) and LLM selection are separate decisions. Current generation remains local Ollama only. The planned selectable LLM reuses the existing `GenerationProvider` port and `GenerationService` contracts instead of adding a second generation architecture.
+STT selection (Vosk default, Faster-Whisper, Deepgram) and LLM selection are separate decisions. Current runtime generation remains local Ollama only. The DeepSeek adapter reuses the existing `GenerationProvider` port and `GenerationService` contracts instead of adding a second generation architecture, but it is not wired into bootstrap and cannot be selected.
 
-- **DeepSeek** is the first planned cloud LLM provider, BYOK. It is a new adapter, not the Deepgram STT integration and not an OpenCode/agent integration.
+- **DeepSeek Stage 1 adapter (implemented, not enabled):** `app/infrastructure/deepseek.py` accepts only `deepseek-flash` or `deepseek-v4-pro`, the fixed `https://api.deepseek.com/chat/completions` origin, an injected key, explicit non-thinking and an explicit token limit. It requests no stream, tools or search, disables proxies/redirects/retries, reads a bounded body under one total deadline and returns only one complete `finish_reason:"stop"` assistant message. Failures reuse the existing sanitized codes; upstream bodies and keys are not logged. Deterministic HTTP-mock tests cover payload/provenance and failure boundaries. Nothing here proves live provider behavior, billing or Windows acceptance.
+- **DeepSeek Stage 2 credentials (implemented, local only):** separate Windows target, environment-profile name and lock; a shared global dialog guard across providers; and a separate Settings section with explicit CRUD and confirmation. The helper and IPC remain status-only and action-allowlisted. Status means local presence, not selection, authentication, balance, model access or activation. See [Stage 2 boundaries](#ai-002-stage-2--separate-provider-credential-namespace).
 - **OpenAI** is deferred as a future provider. The earlier placeholder described AI-002 as OpenAI-only; AI-002 is now the umbrella task for planned cloud BYOK LLM support.
 - Nothing switches automatically in either direction: cloud STT does not select a cloud LLM, and a cloud LLM does not change STT.
 
 ### Credentials scoped per provider
 
-Planned cloud credentials reuse the CLOUD-001 Windows Credential Manager adapter and native helper entry path, scoped to the provider: a separate fixed target, environment override and lock/guard per provider, with independent Configure/Replace/Delete and status. Keys remain outside the React renderer, IPC payloads, plaintext logs, SQLite and repository/installer content. The application never reads or imports OpenCode credentials; the user must supply a key explicitly. Existing Deepgram behavior is unchanged.
+Stage 2 cloud credentials reuse the CLOUD-001 Windows Credential Manager adapter and native helper entry path, scoped to the provider: a separate fixed target, environment profile and lock/guard per provider, with independent Configure/Replace/Delete and status. Keys remain outside the React renderer, IPC payloads, plaintext logs, SQLite and repository/installer content. The application never reads or imports OpenCode credentials; the user must supply a key explicitly. Existing Deepgram capture, IPC and backend behavior is unchanged.
 
 ### Retrieval, disclosure and cost
 
@@ -183,7 +192,7 @@ RAG order stays RAG-first: exact Q&A with source → optional semantic Q&A label
 
 Before any cloud LLM request, the user must select that provider explicitly and see a disclosure. Transmission is limited to the detected question, the necessary fixed instructions and the current fixed synthetic examples — not the full transcript, audio, documents or additional retrieved context. Do not assume that adding other data is acceptable. The disclosure states that content leaves the machine, names the provider and warns about possible provider charges. STT consent remains separate and unchanged; cloud use is not inferred from a stored key.
 
-Usage and cost display is planned as **estimated** from reported usage when available, not a provider bill; missing usage is shown as unknown. See [roadmap](roadmap.md#ai-002--planned-independent-cloud-llm-byok).
+Usage and cost display is planned as **estimated** from reported usage when available, not a provider bill; missing usage is shown as unknown. See [roadmap](roadmap.md#ai-002--stages-12-implemented-stage-3-planned-cloud-llm-byok).
 
 ## Approved direction — incremental refactoring
 
@@ -201,6 +210,6 @@ Dependencies point inward: domain imports no frameworks/adapters; application de
 
 For desktop, progressively separate `src/app`, `src/features/{live,knowledge,practice,settings}` and genuinely shared HTTP/bridge/UI modules. Electron should separate window lifecycle, permission/protection policies, IPC validation/handlers and preloads. Business coordination should not be embedded in JSX or platform handlers. Do not mechanically reproduce backend layers in React.
 
-Exact filenames and extraction order still need task-level approval. Prefer a few cohesive modules, hooks/reducers and concrete required ports over generic repositories, a DI framework, global state dependency or an interface for every class. Preserve the lab and existing Practice behavior; expanded Practice remains future work. The only current generation adapter is local Ollama, optionally integrated with Live; no cloud LLM adapter exists. The [planned independent cloud LLM](#planned--commercial-desktop-and-independent-cloud-llm) is direction only, and real provider/Windows acceptance is pending.
+Exact filenames and extraction order still need task-level approval. Prefer a few cohesive modules, hooks/reducers and concrete required ports over generic repositories, a DI framework, global state dependency or an interface for every class. Preserve the lab and existing Practice behavior; expanded Practice remains future work. The only composed generation adapter is local Ollama, optionally integrated with Live. AI-002 Stage 1 adds an isolated DeepSeek adapter that is not composed or selectable, and Stage 2 adds separate local DeepSeek key management. [Stage 3](#commercial-desktop-and-cloud-llm-direction) remains direction only, and real provider/Windows acceptance is pending.
 
 Validate main Live first, then extract one responsibility per task with contract/regression tests and Windows acceptance where audio, IPC, lifecycle or protection is affected. Separate behavior fixes from moves. See [roadmap](roadmap.md) and [engineering rules](../AGENTS.md).

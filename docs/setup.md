@@ -78,6 +78,12 @@ Remove-Item Env:\COPILOT_DEEPGRAM_API_KEY -ErrorAction SilentlyContinue
 
 Windows storage is not a vault against malware running as the same user or an administrator. Native input is not on the secure desktop and is not guaranteed invisible to screen sharing; Python cannot guarantee complete plaintext-memory erasure. Tokens are limited to 256 printable ASCII characters, with no whitespace. Cost/history features remain planned. See [credential boundaries](architecture.md#cloud-001--windows-credential-boundary), [credential acceptance checks](live-mode.md#cloud-001--windows-key-management) and [observed STT evidence](live-mode.md#stt-001b--initial-deepgram-windows-observation-2026-11-16).
 
+## Optional DeepSeek key (local storage only)
+
+AI-002 Stage 2 adds a separate **Settings → DeepSeek API Key (cloud)** section in Windows development Electron. Configure, Replace and Delete use the same empty native credential dialog and confirmation rules as Deepgram. The key is stored under the fixed `InterviewCopilot/DeepSeek` target; it never passes through React, IPC payloads, logs, SQLite or helper arguments. Accepted keys are 16–200 letters, digits, `.`, `_` or `-`.
+
+This stage only manages local presence. It does not compose the DeepSeek adapter, select the provider, verify authentication or billing, enable cloud generation or send questions. The Deepgram and DeepSeek keys are independent; no OpenCode credential is read. `COPILOT_DEEPSEEK_API_KEY` is reserved for the planned backend composition and is not read by any running request yet. Packaged management is disabled. A stored key alone is not consent to transmit questions. See [Stage 2 evidence and limits](live-mode.md#ai-002-stage-2--deepseek-local-key-management).
+
 ## Documents and retrieval
 
 Imports support XLSX, DOCX, PDF, TXT and Markdown up to 20 MB:

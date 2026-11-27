@@ -98,7 +98,7 @@ The API listens at `http://127.0.0.1:8765`; Vite uses `http://127.0.0.1:5173`. I
 - **Screen sharing:** main-window exclusion is **best effort**, never proof of invisibility. The auxiliary audio window is not protected; Teams, Zoom and Google Meet exclusion remains unverified.
 - **Accuracy and acceptance:** STT and question detection can miss or combine speech. Full Spanish, latency, stop/restart, overlay and capture-continuity acceptance is pending. AI can invent claims; **AI-001C quality is not accepted**. Review all suggestions. Scanned-PDF OCR is not implemented; see [document-format limits](docs/setup.md#documents-and-retrieval).
 
-**CLOUD-001:** Windows development key management is implemented; owner Windows acceptance is pending. Priorities belong in the [roadmap](docs/roadmap.md); actual acceptance evidence belongs in [Live Mode validation](docs/live-mode.md).
+**CLOUD-001:** Windows development key management is implemented; owner Windows acceptance is pending. **AI-002 Stage 2** adds separate local DeepSeek key management only; provider selection and cloud generation remain planned. Priorities belong in the [roadmap](docs/roadmap.md); actual acceptance evidence belongs in [Live Mode validation](docs/live-mode.md).
 
 ## Documentation
 

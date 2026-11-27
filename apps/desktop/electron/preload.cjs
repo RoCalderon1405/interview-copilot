@@ -6,6 +6,10 @@ contextBridge.exposeInMainWorld('copilotDesktop', {
     ? ipcRenderer.invoke('copilot:deepgram-credentials', action)
     : Promise.resolve({result:'error',stored:null}),
   cancelDeepgramKey: () => ipcRenderer.invoke('copilot:deepgram-cancel'),
+  manageDeepseekKey: action => ['status','configure','replace','delete'].includes(action)
+    ? ipcRenderer.invoke('copilot:deepseek-credentials', action)
+    : Promise.resolve({result:'error',stored:null}),
+  cancelDeepseekKey: () => ipcRenderer.invoke('copilot:deepseek-cancel'),
   getWindowState: () => ipcRenderer.invoke('copilot:window-state'),
   setLiveMode: mode => ipcRenderer.invoke('copilot:set-live-mode', mode),
   setLiveOpacity: opacity => ipcRenderer.invoke('copilot:set-live-opacity', opacity),
